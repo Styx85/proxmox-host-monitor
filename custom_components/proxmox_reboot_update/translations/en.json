@@ -54,5 +54,29 @@
         }
       }
     }
+  },
+  "issues": {
+    "reboot_button_unavailable": {
+      "title": "Proxmox reboot button is no longer available",
+      "fix_flow": {
+        "step": {
+          "select_button": {
+            "title": "Select a Proxmox reboot button",
+            "description": "The configured reboot button `{entity_id}` does not exist or is no longer provided by its integration, so the Proxmox host cannot be rebooted from Home Assistant.\n\nWith the Proxmox VE integration, node reboot buttons are only created if the Proxmox user or API token has the `Sys.PowerMgmt` privilege on the node. Grant it, reload the Proxmox VE integration, and then select the reboot button below.",
+            "data": {
+              "reboot_button": "Proxmox reboot button"
+            }
+          }
+        },
+        "abort": {
+          "entry_not_found": "Proxmox Reboot Update is no longer configured."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "reboot_button_unavailable": {
+      "message": "The Proxmox reboot button {entity_id} is unavailable. Check that the Proxmox VE integration is running and that its user has the Sys.PowerMgmt privilege."
+    }
   }
 }

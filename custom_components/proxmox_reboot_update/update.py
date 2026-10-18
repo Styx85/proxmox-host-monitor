@@ -5,16 +5,18 @@ from datetime import datetime
 import logging
 
 from homeassistant.components.update import UpdateEntity, UpdateEntityFeature
-from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device import async_entity_id_to_device
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
 
 from . import ProxmoxRebootConfigEntry
+from .button_monitor import get_reboot_button
 from .const import (
-    CONF_REBOOT_BUTTON,
+    DOMAIN,
     REBOOT_TIMEOUT,
     SIGNAL_REBOOT_STATUS,
     STATUS_TIMEOUT,
@@ -53,10 +55,7 @@ class ProxmoxRebootUpdate(UpdateEntity):
     ) -> None:
         """Initialize the entity."""
         self._entry = entry
-        self._reboot_button = entry.options.get(
-            CONF_REBOOT_BUTTON,
-            entry.data[CONF_REBOOT_BUTTON],
-        )
+        self._reboot_button = get_reboot_button(entry)
         self._cancel_status_timeout: CALLBACK_TYPE | None = None
         self._reboot_finished: asyncio.Event | None = None
 
@@ -176,6 +175,16 @@ class ProxmoxRebootUpdate(UpdateEntity):
         """
         if not self._entry.runtime_data.reboot_required:
             return
+
+        # Home Assistant silently skips unavailable entities on service calls,
+        # which would leave the update in progress without a reboot.
+        button_state = self.hass.states.get(self._reboot_button)
+        if button_state is None or button_state.state == STATE_UNAVAILABLE:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="reboot_button_unavailable",
+                translation_placeholders={"entity_id": self._reboot_button},
+            )
 
         self._reboot_finished = asyncio.Event()
         self._attr_in_progress = True

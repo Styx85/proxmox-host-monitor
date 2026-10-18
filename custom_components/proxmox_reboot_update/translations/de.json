@@ -54,5 +54,29 @@
         }
       }
     }
+  },
+  "issues": {
+    "reboot_button_unavailable": {
+      "title": "Proxmox-Neustart-Button ist nicht mehr verfügbar",
+      "fix_flow": {
+        "step": {
+          "select_button": {
+            "title": "Proxmox-Neustart-Button auswählen",
+            "description": "Der eingestellte Neustart-Button `{entity_id}` existiert nicht oder wird von seiner Integration nicht mehr bereitgestellt. Der Proxmox-Host kann deshalb nicht aus Home Assistant neu gestartet werden.\n\nDie Proxmox-VE-Integration legt Neustart-Buttons für Nodes nur an, wenn der Proxmox-Benutzer bzw. API-Token die Berechtigung `Sys.PowerMgmt` auf dem Node hat. Vergib sie, lade die Proxmox-VE-Integration neu und wähle anschließend unten den Neustart-Button aus.",
+            "data": {
+              "reboot_button": "Proxmox-Neustart-Button"
+            }
+          }
+        },
+        "abort": {
+          "entry_not_found": "Proxmox Reboot Update ist nicht mehr eingerichtet."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "reboot_button_unavailable": {
+      "message": "Der Proxmox-Neustart-Button {entity_id} ist nicht verfügbar. Prüfe, ob die Proxmox-VE-Integration läuft und ihr Benutzer die Berechtigung Sys.PowerMgmt hat."
+    }
   }
 }

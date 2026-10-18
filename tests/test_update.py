@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, State
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
@@ -32,6 +33,7 @@ BUTTON = "button.pve_reboot"
 @pytest.fixture
 async def entry(hass: HomeAssistant) -> MockConfigEntry:
     """Set up the integration."""
+    hass.states.async_set(BUTTON, "unknown")
     assert await async_setup_component(hass, "http", {})
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -176,3 +178,20 @@ async def test_install_progress_timeout(hass, entry, hass_client_no_auth):
     state = hass.states.get(entity_id)
     assert state.state == STATE_ON
     assert state.attributes["in_progress"] is False
+
+
+async def test_install_unavailable_button(hass, entry, hass_client_no_auth):
+    """Installing fails loudly instead of waiting when the button is unavailable."""
+    presses = async_mock_service(hass, "button", "press")
+    entity_id = _entity_id(hass)
+    await _post(hass_client_no_auth, {"required": True})
+    await hass.async_block_till_done()
+    hass.states.async_set(BUTTON, STATE_UNAVAILABLE)
+
+    with pytest.raises(HomeAssistantError) as err:
+        await hass.services.async_call(
+            "update", "install", {"entity_id": entity_id}, blocking=True
+        )
+    assert err.value.translation_key == "reboot_button_unavailable"
+    assert not presses
+    assert hass.states.get(entity_id).attributes["in_progress"] is False

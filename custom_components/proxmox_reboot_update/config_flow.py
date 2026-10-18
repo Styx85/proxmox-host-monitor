@@ -17,6 +17,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
+from .button_monitor import get_reboot_button
 from .const import CONF_REBOOT_BUTTON, CONF_WEBHOOK_ID, DOMAIN
 
 
@@ -114,10 +115,7 @@ class ProxmoxRebootUpdateOptionsFlow(OptionsFlowWithReload):
             self.config_entry.data[CONF_WEBHOOK_ID],
         )
 
-        current_button = self.config_entry.options.get(
-            CONF_REBOOT_BUTTON,
-            self.config_entry.data[CONF_REBOOT_BUTTON],
-        )
+        current_button = get_reboot_button(self.config_entry)
 
         if user_input is not None:
             return self.async_create_entry(
