@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="custom_components/proxmox_reboot_update/brand/icon@2x.png" alt="Proxmox Reboot Update icon" width="160">
+</p>
+
 # Proxmox Reboot Update
 
 Home Assistant helper integration that exposes a pending Proxmox VE host reboot as a normal `update` entity.
