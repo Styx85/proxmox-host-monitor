@@ -46,6 +46,7 @@ async def async_setup_entry(
         "Proxmox Reboot Update",
         entry.data[CONF_WEBHOOK_ID],
         async_handle_webhook,
+        local_only=True,
         allowed_methods=[METH_POST],
     )
 
@@ -107,6 +108,12 @@ async def async_handle_webhook(
         payload = await request.json()
     except (ValueError, TypeError):
         return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    if not isinstance(payload, dict):
+        return web.json_response(
+            {"error": "Payload must be a JSON object"},
+            status=400,
+        )
 
     required = payload.get("required")
     if not isinstance(required, bool):

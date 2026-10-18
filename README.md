@@ -122,6 +122,13 @@ systemctl list-timers proxmox-reboot-status.timer
 
 The Proxmox host will now report its reboot status to Home Assistant every five minutes and shortly after boot.
 
+## Behavior
+
+- The last known status is restored after a Home Assistant restart.
+- If the host has not reported for 15 minutes, the update entity becomes unavailable.
+- Installing the update presses the reboot button and shows the update as in progress until the host reports that no reboot is required anymore (at most 30 minutes).
+- The webhook only accepts requests from the local network.
+
 ## Testing
 
 You can test the complete status path manually.
