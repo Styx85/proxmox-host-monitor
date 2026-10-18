@@ -10,11 +10,14 @@ from homeassistant.components.webhook import async_generate_id as webhook_genera
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
+from .button_monitor import async_setup_button_monitor
 from .const import (
     CONF_WEBHOOK_ID,
     DOMAIN,
+    ISSUE_REBOOT_BUTTON_UNAVAILABLE,
     LEGACY_CONF_SOURCE_ENTITY,
     SIGNAL_REBOOT_STATUS,
 )
@@ -51,6 +54,7 @@ async def async_setup_entry(
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    async_setup_button_monitor(hass, entry)
     return True
 
 
@@ -65,6 +69,14 @@ async def async_unload_entry(
         webhook.async_unregister(hass, entry.data[CONF_WEBHOOK_ID])
 
     return unload_ok
+
+
+async def async_remove_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Remove the repair issue together with the config entry."""
+    ir.async_delete_issue(hass, DOMAIN, ISSUE_REBOOT_BUTTON_UNAVAILABLE)
 
 
 async def async_migrate_entry(

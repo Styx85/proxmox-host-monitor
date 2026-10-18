@@ -16,3 +16,5 @@ STATUS_TIMEOUT = timedelta(minutes=15)
 
 # Give up waiting for the host to come back after this long.
 REBOOT_TIMEOUT = timedelta(minutes=30)
+
+ISSUE_REBOOT_BUTTON_UNAVAILABLE = "reboot_button_unavailable"

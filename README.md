@@ -128,6 +128,9 @@ The Proxmox host will now report its reboot status to Home Assistant every five 
 - If the host has not reported for 15 minutes, the update entity becomes unavailable.
 - Installing the update presses the reboot button and shows the update as in progress until the host reports that no reboot is required anymore (at most 30 minutes).
 - The webhook only accepts requests from the local network.
+- If the selected reboot button disappears or is no longer provided by its integration, a repair issue appears under **Settings → System → Repairs**. It lets you select a new button directly.
+
+The Proxmox VE integration only creates node reboot buttons if its Proxmox user or API token has the `Sys.PowerMgmt` privilege on the node.
 
 ## Testing
 
