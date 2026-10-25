@@ -10,6 +10,7 @@ from homeassistant.helpers import selector
 from . import async_save
 from .button_monitor import get_reboot_button
 from .const import ACTION_BTRFS_REMOVE, CONF_REBOOT_BUTTON, EVENT_ALERT
+from .helpers import format_problems
 
 
 class RebootButtonRepairFlow(RepairsFlow):
@@ -127,6 +128,7 @@ class DiskRemovalRepairFlow(RepairsFlow):
                 "disk": disk.get("name", ""),
                 "model": disk.get("model") or "",
                 "serial": self._serial,
+                "problems": ", ".join(format_problems(disk)),
                 "pool": pool["mount"],
             },
         )

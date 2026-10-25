@@ -213,12 +213,11 @@
     },
     "disk_failing_removable": {
       "title": "Disk {disk} is failing and can be removed",
-      "description": "Disk **{disk}** ({model}, serial {serial}) reports critical problems: {problems}.\n\nThe data of `{pool}` fits on the remaining disks. Use **Submit** to remove the disk from the filesystem; its data is moved to the other disks first.",
       "fix_flow": {
         "step": {
           "confirm_removal": {
             "title": "Remove {disk} from {pool}?",
-            "description": "The Proxmox host runs `btrfs device remove` for **{disk}** ({model}, serial {serial}). All data on it is moved to the other disks of `{pool}` first, which can take hours and slows down the filesystem meanwhile. The host checks again before it starts and refuses if it is no longer safe.\n\nThe host picks up the request within 5 minutes. Afterwards the disk can be disconnected."
+            "description": "Disk **{disk}** ({model}, serial {serial}) reports critical problems: {problems}.\n\nThe Proxmox host runs `btrfs device remove` for **{disk}** ({model}, serial {serial}). All data on it is moved to the other disks of `{pool}` first, which can take hours and slows down the filesystem meanwhile. The host checks again before it starts and refuses if it is no longer safe.\n\nThe host picks up the request within 5 minutes. Afterwards the disk can be disconnected."
           }
         },
         "abort": {

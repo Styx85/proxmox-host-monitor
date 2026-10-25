@@ -213,12 +213,11 @@
     },
     "disk_failing_removable": {
       "title": "Festplatte {disk} fällt aus und kann entfernt werden",
-      "description": "Die Festplatte **{disk}** ({model}, Seriennummer {serial}) meldet kritische Probleme: {problems}.\n\nDie Daten von `{pool}` passen auf die übrigen Platten. Mit **Absenden** wird die Platte aus dem Dateisystem entfernt; ihre Daten werden vorher auf die anderen Platten verschoben.",
       "fix_flow": {
         "step": {
           "confirm_removal": {
             "title": "{disk} aus {pool} entfernen?",
-            "description": "Der Proxmox-Host führt `btrfs device remove` für **{disk}** ({model}, Seriennummer {serial}) aus. Alle Daten darauf werden zuerst auf die anderen Platten von `{pool}` verschoben. Das kann Stunden dauern und bremst das Dateisystem so lange. Der Host prüft vor dem Start erneut und lehnt ab, wenn es nicht mehr sicher ist.\n\nDer Host holt den Auftrag innerhalb von 5 Minuten ab. Danach kann die Platte abgeklemmt werden."
+            "description": "Die Festplatte **{disk}** ({model}, Seriennummer {serial}) meldet kritische Probleme: {problems}.\n\nDer Proxmox-Host führt `btrfs device remove` für **{disk}** ({model}, Seriennummer {serial}) aus. Alle Daten darauf werden zuerst auf die anderen Platten von `{pool}` verschoben. Das kann Stunden dauern und bremst das Dateisystem so lange. Der Host prüft vor dem Start erneut und lehnt ab, wenn es nicht mehr sicher ist.\n\nDer Host holt den Auftrag innerhalb von 5 Minuten ab. Danach kann die Platte abgeklemmt werden."
           }
         },
         "abort": {

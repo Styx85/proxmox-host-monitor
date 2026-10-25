@@ -163,6 +163,7 @@ async def test_removal_flow(hass, entry, report):
     result = await flow.async_step_init()
     assert result["step_id"] == "confirm_removal"
     assert result["description_placeholders"]["pool"] == "/mnt/storage"
+    assert result["description_placeholders"]["problems"] == "pending_sectors: 1414"
     result = await flow.async_step_confirm_removal({})
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
