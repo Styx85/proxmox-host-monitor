@@ -47,7 +47,7 @@ Then run `systemctl restart smartd`; `smartd -q showtests` lists the next tests.
 
 **Btrfs storage and failing disks**
 
-- One device per Btrfs filesystem with free space, data, raw size, usage, number of disks, the worst health of its disks, a problem sensor listing its critical and warning disks, the running operation (balance with progress, or the disk being removed). The usage sensor carries the profiles per data, metadata and system and the allocation per disk.
+- One device per Btrfs filesystem with free space, data, raw size, usage, number of disks, the worst health of its disks, a problem sensor listing its critical and warning disks, the running operation (balance or scrub with progress, or the disk being removed). The usage sensor carries the profiles per data, metadata and system and the allocation per disk.
 - Every report checks for each disk whether the data of its filesystem would still fit on the other disks (respecting the RAID profiles and a safety margin). The result is shown as *Removable* on the disk.
 - A critical disk raises a repair issue under **Settings → System → Repairs**:
   - **Removable**: confirm the repair to remove the disk from the filesystem. The host moves its data to the other disks with `btrfs device remove` and reports the progress. The host checks again before it starts and refuses while a balance runs or if the space no longer suffices.
@@ -73,7 +73,7 @@ Every health change of a disk, a Btrfs filesystem or the host and every start an
 
 **Notifications**
 
-Disk failures, low space and removals fire the event `proxmox_host_monitor_alert`, so you can send push notifications, see [Notifications](#notifications).
+Disk failures, low space, removals, host problems and finished scrubs fire the event `proxmox_host_monitor_alert`, so you can send push notifications, see [Notifications](#notifications). A scrub is announced by the next report after it ended (within 15 minutes); add `ExecStopPost=/usr/bin/systemctl start --no-block proxmox-host-monitor-disks.service` to your scrub service to report it right away.
 
 **Setup from Home Assistant**
 
@@ -114,6 +114,7 @@ The integration fires `proxmox_host_monitor_alert` once per situation:
 | `removal_requested`, `removal_started`, `removal_finished` | `disk`, `serial`, `pool` |
 | `removal_failed` | `disk`, `serial`, `reason` |
 | `host_problem` | `code`, `item`, `value`, `severity` |
+| `scrub_finished` | `pool`, `result` (`ok`, `repaired`, `uncorrectable`, `aborted`), `status`, `duration`, `errors`, `corrected`, `uncorrectable` |
 
 Example automation for a push notification:
 
