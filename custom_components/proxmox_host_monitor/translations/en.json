@@ -232,6 +232,17 @@
       },
       "pool_devices": {
         "name": "Disks"
+      },
+      "pool_operation": {
+        "name": "Operation",
+        "state": {
+          "idle": "None",
+          "balance": "Balance",
+          "removal": "Disk removal"
+        }
+      },
+      "pool_progress": {
+        "name": "Progress"
       }
     }
   },

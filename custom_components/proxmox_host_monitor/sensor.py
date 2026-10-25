@@ -22,7 +22,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import ProxmoxHostConfigEntry
 from .alerts import find_pool_device
-from .const import DISK_STATUSES
+from .const import DISK_STATUSES, OPERATION_SUFFIX, OPERATIONS, POOL_PREFIX
 from .entity import (
     ProxmoxDiskEntity,
     ProxmoxHostSummaryEntity,
@@ -30,7 +30,8 @@ from .entity import (
     async_setup_disk_platform,
     async_setup_pool_platform,
 )
-from .helpers import format_problems, free_share
+from .helpers import format_problems, free_share, pool_operation
+from .status import health_summary
 
 SUMMARY_HEALTH = SensorEntityDescription(
     key="disk_health",
@@ -159,6 +160,20 @@ POOL_HEALTH = SensorEntityDescription(
     options=list(DISK_STATUSES),
 )
 
+POOL_OPERATION = SensorEntityDescription(
+    key="operation",
+    translation_key="pool_operation",
+    device_class=SensorDeviceClass.ENUM,
+    options=list(OPERATIONS),
+)
+
+POOL_PROGRESS = SensorEntityDescription(
+    key="progress",
+    translation_key="pool_progress",
+    native_unit_of_measurement=PERCENTAGE,
+    state_class=SensorStateClass.MEASUREMENT,
+)
+
 POOL_DEVICES = SensorEntityDescription(
     key="devices",
     translation_key="pool_devices",
@@ -199,6 +214,8 @@ async def async_setup_entry(
             ProxmoxPoolUsedSensor(entry, uuid, POOL_USED),
             ProxmoxPoolHealthSensor(entry, uuid, POOL_HEALTH),
             ProxmoxPoolDevicesSensor(entry, uuid, POOL_DEVICES),
+            ProxmoxPoolOperationSensor(entry, uuid, POOL_OPERATION),
+            ProxmoxPoolOperationSensor(entry, uuid, POOL_PROGRESS),
         ],
     )
 
@@ -209,8 +226,13 @@ class ProxmoxDisksHealthSensor(ProxmoxHostSummaryEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         """Return the worst disk status."""
-        statuses = {disk["status"] for disk in self.present_disks}
-        return max(statuses, key=DISK_STATUSES.index, default=DISK_STATUSES[0])
+        return health_summary(self.present_disks)["status"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return which disks are critical and which have warnings."""
+        summary = health_summary(self.present_disks)
+        return {key: summary[key] for key in ("critical", "warning")}
 
 
 class ProxmoxDiskHealthSensor(ProxmoxDiskEntity, SensorEntity):
@@ -308,8 +330,41 @@ class ProxmoxPoolHealthSensor(ProxmoxPoolEntity, SensorEntity):
     @property
     def native_value(self) -> str:
         """Return the worst status of the filesystem's disks."""
-        statuses = {disk["status"] for disk in self.member_disks}
-        return max(statuses, key=DISK_STATUSES.index, default=DISK_STATUSES[0])
+        return health_summary(self.member_disks)["status"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return which disks are critical and which have warnings."""
+        summary = health_summary(self.member_disks)
+        return {key: summary[key] for key in ("critical", "warning")}
+
+
+class ProxmoxPoolOperationSensor(ProxmoxPoolEntity, SensorEntity):
+    """The running operation of a Btrfs filesystem or its progress."""
+
+    def __init__(
+        self,
+        entry: ProxmoxHostConfigEntry,
+        uuid: str,
+        description: SensorEntityDescription,
+    ) -> None:
+        """Initialize the entity."""
+        super().__init__(entry, uuid, description)
+        self._context_key = f"{POOL_PREFIX}{uuid}{OPERATION_SUFFIX}"
+
+    @property
+    def native_value(self) -> str | int | None:
+        """Return the operation or the progress of a balance."""
+        return pool_operation(self.pool, self._entry.runtime_data.disks)[
+            self.entity_description.key
+        ]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return the disks being removed."""
+        if self.entity_description.key != "operation":
+            return None
+        return {"disks": pool_operation(self.pool, self._entry.runtime_data.disks)["disks"]}
 
 
 class ProxmoxPoolDevicesSensor(ProxmoxPoolEntity, SensorEntity):

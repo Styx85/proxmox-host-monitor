@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from . import ProxmoxHostConfigEntry
 from .const import (
     DOMAIN,
+    HOST_SCOPE,
     POOL_PREFIX,
     SIGNAL_DISK_REPORT,
     SIGNAL_NEW_DISKS,
@@ -47,16 +48,33 @@ class ProxmoxHostEntity(Entity):
         self._entry = entry
         self.entity_description = description
 
+    # Key of the health change whose context the state is written in.
+    _context_key: str | None = None
+
     async def async_added_to_hass(self) -> None:
         """Update the state whenever the host reports."""
         await super().async_added_to_hass()
+        # Also the first state after a restart shows its reason.
+        self._async_use_context()
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,
                 f"{SIGNAL_DISK_REPORT}_{self._entry.entry_id}",
-                self.async_write_ha_state,
+                self._async_handle_report,
             )
         )
+
+    @callback
+    def _async_use_context(self) -> None:
+        contexts = self._entry.runtime_data.contexts
+        if self._context_key is not None and (context := contexts.get(self._context_key)):
+            self.async_set_context(context)
+
+    @callback
+    def _async_handle_report(self) -> None:
+        # The logbook then shows the health event with its reason as cause.
+        self._async_use_context()
+        self.async_write_ha_state()
 
 
 class ProxmoxHostSummaryEntity(ProxmoxHostEntity):
@@ -70,6 +88,7 @@ class ProxmoxHostSummaryEntity(ProxmoxHostEntity):
         """Initialize the entity."""
         super().__init__(entry, description)
         self._attr_unique_id = description.key
+        self._context_key = HOST_SCOPE
         if (node := entry.runtime_data.node_device) is not None:
             self.device_entry = node
 
@@ -101,6 +120,7 @@ class ProxmoxDiskEntity(ProxmoxHostEntity):
         """Initialize the entity."""
         super().__init__(entry, description)
         self._serial = serial
+        self._context_key = serial
         self._attr_unique_id = f"disk_{serial}_{description.key}"
 
         model = self.disk.get("model") or "Disk"
@@ -124,23 +144,6 @@ class ProxmoxDiskEntity(ProxmoxHostEntity):
         """Return whether the disk was part of a recent report."""
         return self._entry.runtime_data.disk_available(self._serial)
 
-    async def async_added_to_hass(self) -> None:
-        """Write reports in the context of the disk's latest status change."""
-        await Entity.async_added_to_hass(self)
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                f"{SIGNAL_DISK_REPORT}_{self._entry.entry_id}",
-                self._async_handle_report,
-            )
-        )
-
-    @callback
-    def _async_handle_report(self) -> None:
-        # The logbook then shows the event with the reason as cause.
-        if (context := self._entry.runtime_data.contexts.get(self._serial)) is not None:
-            self.async_set_context(context)
-        self.async_write_ha_state()
 
 
 class ProxmoxPoolEntity(ProxmoxHostEntity):
@@ -155,6 +158,7 @@ class ProxmoxPoolEntity(ProxmoxHostEntity):
         """Initialize the entity."""
         super().__init__(entry, description)
         self._uuid = uuid
+        self._context_key = f"{POOL_PREFIX}{uuid}"
         self._attr_unique_id = f"{POOL_PREFIX}{uuid}_{description.key}"
         pool = self.pool
         self._attr_device_info = DeviceInfo(

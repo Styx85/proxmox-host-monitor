@@ -5,7 +5,7 @@ from typing import Any
 
 from homeassistant.core import Event, HomeAssistant, callback
 
-from .const import DOMAIN, EVENT_ALERT, EVENT_DISK_STATUS
+from .const import DOMAIN, EVENT_ALERT, EVENT_DISK_STATUS, EVENT_HEALTH_STATUS, EVENT_OPERATION
 
 # The logbook does not translate custom event descriptions, so the few texts
 # are kept here for the languages the integration ships.
@@ -16,6 +16,13 @@ TEXTS: dict[str, dict[str, str]] = {
         "critical": "critical",
         "status": "health {status}",
         "no_problems": "no problems",
+        "critical_disks": "critical: {disks}",
+        "warning_disks": "warning: {disks}",
+        "all_ok": "all disks OK",
+        "balance": "balance running",
+        "balance_progress": "balance running ({progress} % done)",
+        "removal": "removing {disks}",
+        "idle": "no operation running",
         "disk_failing": "disk {disk} is failing",
         "pool_space_low": "{pool} is running out of space",
         "removal_requested": "removal of {disk} requested",
@@ -47,6 +54,13 @@ TEXTS: dict[str, dict[str, str]] = {
         "critical": "kritisch",
         "status": "Zustand {status}",
         "no_problems": "keine Probleme",
+        "critical_disks": "kritisch: {disks}",
+        "warning_disks": "Warnung: {disks}",
+        "all_ok": "alle Platten OK",
+        "balance": "Balance läuft",
+        "balance_progress": "Balance läuft ({progress} % erledigt)",
+        "removal": "Ausbau von {disks} läuft",
+        "idle": "kein Vorgang mehr",
         "disk_failing": "Festplatte {disk} fällt aus",
         "pool_space_low": "{pool} wird voll",
         "removal_requested": "Ausbau von {disk} beauftragt",
@@ -106,5 +120,31 @@ def async_describe_events(
         template = texts.get(data["type"], data["type"])
         return {"name": "Proxmox Host Monitor", "message": template.format(**data)}
 
+    @callback
+    def describe_health(event: Event) -> dict[str, str]:
+        data: dict[str, Any] = event.data
+        status = texts["status"].format(status=texts.get(data["status"], data["status"]))
+        details = [
+            texts[f"{kind}_disks"].format(disks=", ".join(data[kind]))
+            for kind in ("critical", "warning")
+            if data.get(kind)
+        ]
+        return {
+            "name": data["scope"],
+            "message": f"{status}: {' · '.join(details) or texts['all_ok']}",
+        }
+
+    @callback
+    def describe_operation(event: Event) -> dict[str, str]:
+        data: dict[str, Any] = event.data
+        operation = data["operation"]
+        if operation == "balance" and data.get("progress") is not None:
+            message = texts["balance_progress"].format(progress=data["progress"])
+        else:
+            message = texts[operation].format(disks=", ".join(data.get("disks", [])))
+        return {"name": data["scope"], "message": message}
+
     async_describe_event(DOMAIN, EVENT_DISK_STATUS, describe_status)
+    async_describe_event(DOMAIN, EVENT_HEALTH_STATUS, describe_health)
+    async_describe_event(DOMAIN, EVENT_OPERATION, describe_operation)
     async_describe_event(DOMAIN, EVENT_ALERT, describe_alert)

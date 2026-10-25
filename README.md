@@ -47,7 +47,7 @@ Then run `systemctl restart smartd`; `smartd -q showtests` lists the next tests.
 
 **Btrfs storage and failing disks**
 
-- One device per Btrfs filesystem with free space, data, raw size, usage, number of disks, the worst health of its disks, a problem sensor listing its critical and warning disks, and whether a balance or a disk removal is running. The usage sensor carries the profiles per data, metadata and system and the allocation per disk.
+- One device per Btrfs filesystem with free space, data, raw size, usage, number of disks, the worst health of its disks, a problem sensor listing its critical and warning disks, the running operation (balance with progress, or the disk being removed). The usage sensor carries the profiles per data, metadata and system and the allocation per disk.
 - Every report checks for each disk whether the data of its filesystem would still fit on the other disks (respecting the RAID profiles and a safety margin). The result is shown as *Removable* on the disk.
 - A critical disk raises a repair issue under **Settings → System → Repairs**:
   - **Removable**: confirm the repair to remove the disk from the filesystem. The host moves its data to the other disks with `btrfs device remove` and reports the progress. The host checks again before it starts and refuses while a balance runs or if the space no longer suffices.
@@ -55,6 +55,10 @@ Then run `systemctl restart smartd`; `smartd -q showtests` lists the next tests.
   - **Balance running**: removal becomes possible once the balance has finished.
 - A filesystem with less than 10 % free space raises a warning.
 - Home Assistant never connects to the host for this. The removal request is handed to the host with the response to its next report (within 5 minutes).
+
+**Logbook**
+
+Every health change of a disk, a Btrfs filesystem or the host and every start and end of a balance or disk removal is written to the logbook with its reason, for example *Btrfs storage: health critical: critical: sde · warning: sdd* or *balance running (86 % done)*. The changed states are linked to that entry, so *What happened* in the activity details shows the reason. After a restart the current problems are written again.
 
 **Notifications**
 

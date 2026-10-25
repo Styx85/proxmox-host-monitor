@@ -232,6 +232,17 @@
       },
       "pool_devices": {
         "name": "Platten"
+      },
+      "pool_operation": {
+        "name": "Vorgang",
+        "state": {
+          "idle": "Kein",
+          "balance": "Balance",
+          "removal": "Platten-Ausbau"
+        }
+      },
+      "pool_progress": {
+        "name": "Fortschritt"
       }
     }
   },
