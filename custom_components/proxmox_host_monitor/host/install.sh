@@ -198,6 +198,11 @@ chmod 755 /etc/smartmontools/run.d/60proxmox-host-monitor
 systemctl daemon-reload
 for unit in $OWN_UNITS; do
     systemctl enable --now "$unit.timer"
-    systemctl start "$unit.service"
+done
+# Until the setup in Home Assistant is finished, the webhook may still reject
+# reports; the timers retry, so a failed first report is not fatal.
+for unit in $OWN_UNITS; do
+    systemctl start "$unit.service" \
+        || echo "Warning: the first report of $unit failed. The timer retries automatically." >&2
 done
 echo "Proxmox Host Monitor $VERSION installed."

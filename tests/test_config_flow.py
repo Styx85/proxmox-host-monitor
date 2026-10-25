@@ -208,6 +208,7 @@ def test_install_script() -> None:
         assert marker not in script
     assert "smartctl" in script
     assert "uname -r" in script
+    assert "The timer retries automatically" in script
     assert script.count("<<'PHM_EOF'") == script.count("\nPHM_EOF\n")
 
 
