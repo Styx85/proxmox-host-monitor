@@ -5,7 +5,14 @@ from typing import Any
 
 from homeassistant.core import Event, HomeAssistant, callback
 
-from .const import DOMAIN, EVENT_ALERT, EVENT_DISK_STATUS, EVENT_HEALTH_STATUS, EVENT_OPERATION
+from .const import (
+    DOMAIN,
+    EVENT_ALERT,
+    EVENT_DISK_STATUS,
+    EVENT_HEALTH_STATUS,
+    EVENT_HOST_STATUS,
+    EVENT_OPERATION,
+)
 
 # The logbook does not translate custom event descriptions, so the few texts
 # are kept here for the languages the integration ships.
@@ -47,6 +54,23 @@ TEXTS: dict[str, dict[str, str]] = {
         "available_spare": "NVMe spare",
         "percentage_used": "NVMe wear",
         "temperature": "temperature",
+        "io_errors": "I/O errors (24 h)",
+        "host_problem": "host problem: {code} {item}",
+        "failed_unit": "service failed",
+        "scrub_never": "never scrubbed",
+        "scrub_overdue": "scrub overdue (days)",
+        "scrub_uncorrectable": "scrub: uncorrectable errors",
+        "scrub_errors": "scrub: errors",
+        "backup_missing": "no backup job",
+        "backup_never": "no backup yet",
+        "backup_failed": "last backup failed",
+        "backup_overdue": "last backup too old (days)",
+        "thin_pool_full": "thin pool full (%)",
+        "nic_errors": "network errors",
+        "certificate_expired": "certificate expired",
+        "certificate_expiring": "certificate expires (days)",
+        "time_not_synchronized": "clock not synchronized",
+        "unattended_upgrades_failed": "automatic updates failed",
     },
     "de": {
         "ok": "OK",
@@ -85,14 +109,32 @@ TEXTS: dict[str, dict[str, str]] = {
         "available_spare": "NVMe Reserve",
         "percentage_used": "NVMe Verschleiß",
         "temperature": "Temperatur",
+        "io_errors": "I/O-Fehler (24 h)",
+        "host_problem": "Host-Problem: {code} {item}",
+        "failed_unit": "Dienst fehlgeschlagen",
+        "scrub_never": "noch nie gescrubbt",
+        "scrub_overdue": "Scrub überfällig (Tage)",
+        "scrub_uncorrectable": "Scrub: nicht reparierbare Fehler",
+        "scrub_errors": "Scrub: Fehler",
+        "backup_missing": "kein Backup-Job",
+        "backup_never": "noch keine Sicherung",
+        "backup_failed": "letzte Sicherung fehlgeschlagen",
+        "backup_overdue": "letzte Sicherung zu alt (Tage)",
+        "thin_pool_full": "Thin-Pool voll (%)",
+        "nic_errors": "Netzwerkfehler",
+        "certificate_expired": "Zertifikat abgelaufen",
+        "certificate_expiring": "Zertifikat läuft ab (Tage)",
+        "time_not_synchronized": "Uhr nicht synchronisiert",
+        "unattended_upgrades_failed": "automatische Updates fehlgeschlagen",
     },
 }
 
 
 def describe_problem(texts: dict[str, str], problem: str) -> str:
-    """Translate a problem like "pending_sectors: 1414"."""
-    code, _, value = problem.partition(":")
-    label = texts.get(code, code)
+    """Translate a problem like "pending_sectors: 1414" or "scrub_never /mnt"."""
+    head, _, value = problem.partition(":")
+    code, _, item = head.partition(" ")
+    label = texts.get(code, code) + (f" {item}" if item else "")
     return f"{label}:{value}" if value else label
 
 
@@ -126,7 +168,9 @@ def async_describe_events(
 
     @callback
     def describe_alert(event: Event) -> dict[str, str]:
-        data = {"disk": "", "pool": "", "reason": "", **event.data}
+        data = {"disk": "", "pool": "", "reason": "", "item": "", **event.data}
+        if data["type"] == "host_problem":
+            data["code"] = texts.get(data.get("code", ""), data.get("code", ""))
         template = texts.get(data["type"], data["type"])
         return {"name": "Proxmox Host Monitor", "message": template.format(**data)}
 
@@ -157,7 +201,21 @@ def async_describe_events(
             message = texts[operation].format(disks=", ".join(data.get("disks", [])))
         return _linked(data, {"name": data["scope"], "message": message})
 
+    @callback
+    def describe_host(event: Event) -> dict[str, str]:
+        data: dict[str, Any] = event.data
+        problems = [describe_problem(texts, p) for p in data.get("problems", [])]
+        status = texts["status"].format(status=texts.get(data["status"], data["status"]))
+        return _linked(
+            data,
+            {
+                "name": data["scope"],
+                "message": f"{status}: {', '.join(problems) or texts['no_problems']}",
+            },
+        )
+
     async_describe_event(DOMAIN, EVENT_DISK_STATUS, describe_status)
+    async_describe_event(DOMAIN, EVENT_HOST_STATUS, describe_host)
     async_describe_event(DOMAIN, EVENT_HEALTH_STATUS, describe_health)
     async_describe_event(DOMAIN, EVENT_OPERATION, describe_operation)
     async_describe_event(DOMAIN, EVENT_ALERT, describe_alert)

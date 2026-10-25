@@ -146,6 +146,9 @@
             "name": "Probleme"
           }
         }
+      },
+      "host_problem": {
+        "name": "Host-Problem"
       }
     },
     "sensor": {
@@ -243,6 +246,36 @@
       },
       "pool_progress": {
         "name": "Fortschritt"
+      },
+      "failed_units": {
+        "name": "Fehlgeschlagene Dienste"
+      },
+      "last_backup": {
+        "name": "Letzte Sicherung"
+      },
+      "certificate_expires": {
+        "name": "Zertifikat läuft ab"
+      },
+      "unattended_upgrades": {
+        "name": "Automatische Updates"
+      },
+      "host_temperature": {
+        "name": "Temperatur {sensor}"
+      },
+      "host_fan": {
+        "name": "Lüfter {sensor}"
+      },
+      "thin_pool": {
+        "name": "Thin-Pool {name}"
+      },
+      "nic_speed": {
+        "name": "Verbindung {name}"
+      },
+      "pool_last_scrub": {
+        "name": "Letzter Scrub"
+      },
+      "io_errors_24h": {
+        "name": "I/O-Fehler (24 h)"
       }
     }
   },
@@ -298,6 +331,70 @@
     "removal_failed": {
       "title": "Entfernen der Festplatte {disk} fehlgeschlagen",
       "description": "Das Entfernen der Festplatte **{disk}** (Seriennummer {serial}) ist nicht gelungen: {reason}.\n\nPrüfe auf dem Proxmox-Host `journalctl -u proxmox-host-monitor-remove-{serial}`."
+    },
+    "host_failed_unit": {
+      "title": "Dienst {item} auf dem Proxmox-Host fehlgeschlagen",
+      "description": "Die systemd-Unit `{item}` ist im Zustand „failed“. Prüfe sie mit `systemctl status {item}` und `journalctl -u {item}`."
+    },
+    "host_scrub_never": {
+      "title": "{item} wurde noch nie gescrubbt",
+      "description": "Für das Btrfs-Dateisystem `{item}` ist kein Scrub aufgezeichnet. Ein Scrub liest alle Daten und repariert sie aus der redundanten Kopie. Starte `btrfs scrub start {item}` und plane ihn monatlich ein."
+    },
+    "host_scrub_overdue": {
+      "title": "Scrub von {item} überfällig",
+      "description": "Der letzte Scrub von `{item}` ist {value} Tage her. Starte `btrfs scrub start {item}`."
+    },
+    "host_scrub_uncorrectable": {
+      "title": "Scrub fand nicht reparierbare Fehler auf {item}",
+      "description": "Der letzte Scrub von `{item}` fand {value} Fehler, die er nicht reparieren konnte. Betroffene Dateien sind beschädigt; prüfe `btrfs scrub status {item}` und das Kernel-Log."
+    },
+    "host_scrub_errors": {
+      "title": "Scrub fand Fehler auf {item}",
+      "description": "Der letzte Scrub von `{item}` fand {value} Fehler. Prüfe `btrfs scrub status {item}` und die SMART-Werte der Platten."
+    },
+    "host_backup_missing": {
+      "title": "Kein Backup-Job auf dem Proxmox-Host",
+      "description": "Es ist kein Backup-Job eingerichtet, virtuelle Maschinen und Container werden also nicht gesichert. Lege einen unter Rechenzentrum → Backup an."
+    },
+    "host_backup_never": {
+      "title": "Noch keine Sicherung gelaufen",
+      "description": "Es gibt Backup-Jobs, aber auf diesem Node ist noch keine Sicherung gelaufen."
+    },
+    "host_backup_failed": {
+      "title": "Letzte Sicherung fehlgeschlagen",
+      "description": "Die letzte Sicherung auf dem Proxmox-Host endete mit: {value}."
+    },
+    "host_backup_overdue": {
+      "title": "Letzte Sicherung ist {value} Tage alt",
+      "description": "Die letzte Sicherung auf dem Proxmox-Host lief vor {value} Tagen."
+    },
+    "host_temperature": {
+      "title": "{item} ist zu heiß",
+      "description": "{item} auf dem Proxmox-Host hat {value} °C. Prüfe Kühlung und Lüfter."
+    },
+    "host_thin_pool_full": {
+      "title": "Thin-Pool {item} ist zu {value} % voll",
+      "description": "Der LVM-Thin-Pool `{item}` ist zu {value} % belegt (Daten oder Metadaten). Läuft er voll, bleiben die virtuellen Maschinen darauf stehen. Schaffe Platz oder vergrößere den Pool."
+    },
+    "host_nic_errors": {
+      "title": "Netzwerkfehler auf {item}",
+      "description": "Die Netzwerkkarte `{item}` hat seit dem Start {value} Empfangs- oder Sendefehler gezählt. Prüfe Kabel und Switch-Port."
+    },
+    "host_certificate_expired": {
+      "title": "Proxmox-Zertifikat abgelaufen",
+      "description": "Das Zertifikat der Proxmox-Weboberfläche ist abgelaufen. Erneuere es mit `pvecm updatecerts --force` oder über ACME."
+    },
+    "host_certificate_expiring": {
+      "title": "Proxmox-Zertifikat läuft in {value} Tagen ab",
+      "description": "Das Zertifikat der Proxmox-Weboberfläche läuft in {value} Tagen ab."
+    },
+    "host_time_not_synchronized": {
+      "title": "Uhr des Proxmox-Hosts nicht synchronisiert",
+      "description": "Die Systemzeit des Proxmox-Hosts ist nicht mit einem Zeitserver abgeglichen. Prüfe `timedatectl` und chrony."
+    },
+    "host_unattended_upgrades_failed": {
+      "title": "Automatische Updates fehlgeschlagen",
+      "description": "Der letzte Lauf von unattended-upgrades auf dem Proxmox-Host ist fehlgeschlagen. Prüfe `/var/log/unattended-upgrades/`."
     }
   },
   "exceptions": {

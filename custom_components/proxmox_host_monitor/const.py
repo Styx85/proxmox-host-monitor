@@ -25,6 +25,8 @@ EVENT_DISK_STATUS = f"{DOMAIN}_disk_status"
 EVENT_HEALTH_STATUS = f"{DOMAIN}_health_status"
 # Fired when a balance or disk removal on a Btrfs filesystem starts or ends.
 EVENT_OPERATION = f"{DOMAIN}_operation"
+# Fired when the problems of the host itself change.
+EVENT_HOST_STATUS = f"{DOMAIN}_host_status"
 
 OPERATION_IDLE = "idle"
 OPERATION_BALANCE = "balance"
@@ -57,6 +59,7 @@ ISSUE_REBOOT_BUTTON_UNAVAILABLE = "reboot_button_unavailable"
 ISSUE_DISK_FAILING = "disk_failing_{serial}"
 ISSUE_POOL_SPACE_LOW = "pool_space_low_{uuid}"
 ISSUE_REMOVAL_FAILED = "removal_failed_{serial}"
+ISSUE_HOST_PROBLEM = "host_{code}_{item}"
 
 # A Btrfs pool with less free space than this share of its size is low on space.
 POOL_FREE_WARNING = 0.10
@@ -67,3 +70,5 @@ ACTION_BTRFS_REMOVE = "btrfs_remove"
 POOL_PREFIX = "pool_"
 # Key of the whole host in the health summaries.
 HOST_SCOPE = "host"
+# Key of the host problems (services, backups, temperatures, ...).
+HOST_PROBLEMS = "host_problems"

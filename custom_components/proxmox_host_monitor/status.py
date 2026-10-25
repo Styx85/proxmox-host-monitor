@@ -20,13 +20,20 @@ from .const import (
     DOMAIN,
     EVENT_DISK_STATUS,
     EVENT_HEALTH_STATUS,
+    EVENT_HOST_STATUS,
     EVENT_OPERATION,
+    HOST_PROBLEMS,
     HOST_SCOPE,
     OPERATION_IDLE,
     OPERATION_SUFFIX,
     POOL_PREFIX,
 )
-from .helpers import format_problems, pool_operation
+from .helpers import (
+    format_host_problems,
+    format_problems,
+    host_problem_key,
+    pool_operation,
+)
 
 if TYPE_CHECKING:
     from . import ProxmoxHostConfigEntry
@@ -83,6 +90,7 @@ def async_announce_changes(
     hass: HomeAssistant,
     entry: ProxmoxHostConfigEntry,
     previous: dict[str, dict[str, Any]] | None,
+    previous_host: dict[str, Any] | None,
 ) -> None:
     """Fire events for changed health; previous=None announces after a restart.
 
@@ -134,6 +142,34 @@ def async_announce_changes(
                 hass, entry, key, unique_id, EVENT_HEALTH_STATUS, {"scope": name, **summary}
             )
 
+    host = runtime_data.host
+    if host:
+        keys = sorted(host_problem_key(p) for p in host.get("problems", []))
+        if previous is None:
+            changed = bool(keys)
+        else:
+            before = sorted(
+                host_problem_key(p) for p in (previous_host or {}).get("problems", [])
+            )
+            changed = keys != before or host.get("status") != (previous_host or {}).get(
+                "status"
+            )
+        if changed:
+            node = runtime_data.node_device
+            _fire(
+                hass,
+                entry,
+                HOST_PROBLEMS,
+                "host_problem",
+                EVENT_HOST_STATUS,
+                {
+                    "scope": (node.name_by_user or node.name) if node else "Proxmox",
+                    "status": host.get("status", "ok"),
+                    "problems": format_host_problems(host),
+                },
+                domain="binary_sensor",
+            )
+
     for uuid, pool in runtime_data.pools.items():
         key = f"{POOL_PREFIX}{uuid}{OPERATION_SUFFIX}"
         operation = pool_operation(pool, runtime_data.disks)
@@ -163,11 +199,12 @@ def _fire(
     sensor_unique_id: str,
     event_type: str,
     data: dict[str, Any],
+    domain: str = "sensor",
 ) -> None:
     # The entity and device let the logbook list the reason in their activity,
     # even when the state itself does not change (for example after a restart).
     ent_reg = er.async_get(hass)
-    if entity_id := ent_reg.async_get_entity_id("sensor", DOMAIN, sensor_unique_id):
+    if entity_id := ent_reg.async_get_entity_id(domain, DOMAIN, sensor_unique_id):
         data["entity_id"] = entity_id
         if (entity := ent_reg.async_get(entity_id)) and entity.device_id:
             data["device_id"] = entity.device_id

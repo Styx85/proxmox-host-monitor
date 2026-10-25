@@ -146,6 +146,9 @@
             "name": "Problems"
           }
         }
+      },
+      "host_problem": {
+        "name": "Host problem"
       }
     },
     "sensor": {
@@ -243,6 +246,36 @@
       },
       "pool_progress": {
         "name": "Progress"
+      },
+      "failed_units": {
+        "name": "Failed services"
+      },
+      "last_backup": {
+        "name": "Last backup"
+      },
+      "certificate_expires": {
+        "name": "Certificate expires"
+      },
+      "unattended_upgrades": {
+        "name": "Automatic updates"
+      },
+      "host_temperature": {
+        "name": "Temperature {sensor}"
+      },
+      "host_fan": {
+        "name": "Fan {sensor}"
+      },
+      "thin_pool": {
+        "name": "Thin pool {name}"
+      },
+      "nic_speed": {
+        "name": "Link {name}"
+      },
+      "pool_last_scrub": {
+        "name": "Last scrub"
+      },
+      "io_errors_24h": {
+        "name": "I/O errors (24 h)"
       }
     }
   },
@@ -298,6 +331,70 @@
     "removal_failed": {
       "title": "Removing disk {disk} failed",
       "description": "The removal of disk **{disk}** (serial {serial}) did not succeed: {reason}.\n\nCheck `journalctl -u proxmox-host-monitor-remove-{serial}` on the Proxmox host."
+    },
+    "host_failed_unit": {
+      "title": "Service {item} failed on the Proxmox host",
+      "description": "The systemd unit `{item}` is in the failed state. Check it with `systemctl status {item}` and `journalctl -u {item}`."
+    },
+    "host_scrub_never": {
+      "title": "{item} has never been scrubbed",
+      "description": "No scrub of the Btrfs filesystem `{item}` has been recorded. A scrub reads all data and repairs it from the redundant copy. Run `btrfs scrub start {item}` and schedule it monthly."
+    },
+    "host_scrub_overdue": {
+      "title": "Scrub of {item} is overdue",
+      "description": "The last scrub of `{item}` was {value} days ago. Run `btrfs scrub start {item}`."
+    },
+    "host_scrub_uncorrectable": {
+      "title": "Scrub found uncorrectable errors on {item}",
+      "description": "The last scrub of `{item}` found {value} errors it could not repair. Affected files are damaged; check `btrfs scrub status {item}` and the kernel log."
+    },
+    "host_scrub_errors": {
+      "title": "Scrub found errors on {item}",
+      "description": "The last scrub of `{item}` found {value} errors. Check `btrfs scrub status {item}` and the SMART values of the disks."
+    },
+    "host_backup_missing": {
+      "title": "No backup job on the Proxmox host",
+      "description": "No backup job is configured, so virtual machines and containers are not backed up. Create one under Datacenter → Backup."
+    },
+    "host_backup_never": {
+      "title": "No backup has run yet",
+      "description": "Backup jobs exist, but no backup has run on this node yet."
+    },
+    "host_backup_failed": {
+      "title": "Last backup failed",
+      "description": "The last backup on the Proxmox host ended with: {value}."
+    },
+    "host_backup_overdue": {
+      "title": "Last backup is {value} days old",
+      "description": "The last backup on the Proxmox host ran {value} days ago."
+    },
+    "host_temperature": {
+      "title": "{item} is too hot",
+      "description": "{item} on the Proxmox host is at {value} °C. Check cooling and fans."
+    },
+    "host_thin_pool_full": {
+      "title": "Thin pool {item} is {value} % full",
+      "description": "The LVM thin pool `{item}` is {value} % full (data or metadata). When it runs full, virtual machines on it stop. Free up space or extend the pool."
+    },
+    "host_nic_errors": {
+      "title": "Network errors on {item}",
+      "description": "The network interface `{item}` counted {value} receive or transmit errors since boot. Check the cable and the switch port."
+    },
+    "host_certificate_expired": {
+      "title": "Proxmox certificate expired",
+      "description": "The certificate of the Proxmox web interface has expired. Renew it with `pvecm updatecerts --force` or your ACME setup."
+    },
+    "host_certificate_expiring": {
+      "title": "Proxmox certificate expires in {value} days",
+      "description": "The certificate of the Proxmox web interface expires in {value} days."
+    },
+    "host_time_not_synchronized": {
+      "title": "Proxmox host clock is not synchronized",
+      "description": "The system clock of the Proxmox host is not synchronized with a time server. Check `timedatectl` and chrony."
+    },
+    "host_unattended_upgrades_failed": {
+      "title": "Automatic updates failed",
+      "description": "The last run of unattended-upgrades on the Proxmox host failed. Check `/var/log/unattended-upgrades/`."
     }
   },
   "exceptions": {

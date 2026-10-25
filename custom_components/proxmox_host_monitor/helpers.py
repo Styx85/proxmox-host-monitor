@@ -46,3 +46,23 @@ def pool_operation(
             "progress": pool.get("balance_progress"),
         }
     return {"operation": OPERATION_IDLE, "disks": [], "progress": None}
+
+
+def host_problem_key(problem: dict[str, Any]) -> str:
+    """Return a stable key of a host problem: its code and the affected item."""
+    return f"{problem.get('code')}:{problem.get('item') or ''}"
+
+
+def format_host_problems(host: dict[str, Any]) -> list[str]:
+    """Return the host problems as short, language-neutral strings."""
+    result = []
+    for problem in host.get("problems", []):
+        if not isinstance(problem, dict) or "code" not in problem:
+            continue
+        text = problem["code"]
+        if problem.get("item"):
+            text += f" {problem['item']}"
+        if problem.get("value") is not None:
+            text += f": {problem['value']}"
+        result.append(text)
+    return result

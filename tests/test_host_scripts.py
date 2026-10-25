@@ -109,3 +109,35 @@ async def test_disk_info_ssd():
     assert info["power_cycles"] == 57
     assert info["capacity"] == 500107862016
     assert info["self_test_supported"] is True
+
+
+async def test_scrub_status():
+    """The result of the last scrub is parsed, a missing scrub is None."""
+    calls = []
+    m.run = fake({"btrfs scrub status": "UUID: x\n\tno stats available\n"}, calls)
+    assert m.scrub_status("/mnt") is None
+
+    m.run = fake({"btrfs scrub status": (
+        "UUID: x\nScrub started:    Sun Nov  1 03:00:01 2026\nStatus:           finished\n"
+        "Duration:         2:31:02\n\tread_errors: 2\n\tcsum_errors: 1\n"
+        "\tcorrected_errors: 3\n\tuncorrectable_errors: 0\n"
+    )}, calls)
+    scrub = m.scrub_status("/mnt")
+    assert scrub["status"] == "finished"
+    assert scrub["duration"] == 2 * 3600 + 31 * 60 + 2
+    assert (scrub["errors"], scrub["corrected"], scrub["uncorrectable"]) == (3, 3, 0)
+    assert scrub["last"] is not None
+
+
+async def test_kernel_io_errors_and_thin_pools():
+    """I/O errors are counted per disk; only thin pools are reported."""
+    calls = []
+    m.run = fake({
+        "journalctl": "I/O error, dev sde, sector 1\nI/O error, dev sde, sector 2\n"
+                      "I/O error, dev nvme0n1, sector 3\nother line\n",
+        "lvs": '{"report":[{"lv":[{"vg_name":"pve","lv_name":"data","lv_attr":"twi-aotz--",'
+               '"data_percent":"16.75","metadata_percent":"1.01"},{"vg_name":"pve","lv_name":"root",'
+               '"lv_attr":"-wi-ao----","data_percent":"","metadata_percent":""}]}]}',
+    }, calls)
+    assert m.kernel_io_errors() == {"sde": 2, "nvme0": 1}
+    assert m.thin_pools() == [{"name": "pve/data", "data_percent": 16.75, "metadata_percent": 1.01}]

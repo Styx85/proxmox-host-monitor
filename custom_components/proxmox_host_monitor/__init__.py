@@ -64,6 +64,8 @@ class ProxmoxHostRuntimeData:
     # Serial numbers contained in the latest disk report.
     present: set[str] = field(default_factory=set)
     disks_reported_at: datetime | None = None
+    # Services, backups, temperatures and more of the latest report.
+    host: dict[str, Any] = field(default_factory=dict)
     # Btrfs filesystems of the latest report, keyed by UUID.
     pools: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Commands for the host, delivered with the next disk report.
@@ -72,6 +74,8 @@ class ProxmoxHostRuntimeData:
     removals: dict[str, str] = field(default_factory=dict)
     # Alerts already announced, so every alert fires once.
     alerted: set[str] = field(default_factory=set)
+    # Repair issues raised for host problems.
+    host_issues: set[str] = field(default_factory=set)
     # Context of the latest health change per disk serial, filesystem and
     # host, for the logbook.
     contexts: dict[str, Context] = field(default_factory=dict)
@@ -115,6 +119,7 @@ async def async_setup_entry(
         runtime_data.disks = stored.get("disks", {})
         runtime_data.present = set(stored.get("present", []))
         runtime_data.pools = stored.get("pools", {})
+        runtime_data.host = stored.get("host", {})
         runtime_data.commands = stored.get("commands", [])
         runtime_data.removals = stored.get("removals", {})
         runtime_data.alerted = set(stored.get("alerted", []))
@@ -125,7 +130,7 @@ async def async_setup_entry(
     )
     entry.runtime_data = runtime_data
     # Restored entities of unhealthy disks show the reason after a restart.
-    async_announce_changes(hass, entry, None)
+    async_announce_changes(hass, entry, None, None)
 
     webhook.async_register(
         hass,
@@ -232,6 +237,7 @@ def _stored_data(runtime_data: ProxmoxHostRuntimeData) -> dict[str, Any]:
         "disks": runtime_data.disks,
         "present": sorted(runtime_data.present),
         "pools": runtime_data.pools,
+        "host": runtime_data.host,
         "commands": runtime_data.commands,
         "removals": runtime_data.removals,
         "alerted": sorted(runtime_data.alerted),
@@ -361,6 +367,17 @@ async def async_handle_webhook(
             status=400,
         )
 
+    host = payload.get("host")
+    if "host" in payload and not (
+        isinstance(host, dict)
+        and host.get("status", "ok") in DISK_STATUSES
+        and isinstance(host.get("problems", []), list)
+    ):
+        return web.json_response(
+            {"error": "'host' must be an object with status and problems"},
+            status=400,
+        )
+
     pools = payload.get("pools")
     if "pools" in payload and not _valid_pools(pools):
         return web.json_response(
@@ -384,6 +401,9 @@ async def async_handle_webhook(
             disk["serial"] for disk in disks if disk["serial"] not in runtime_data.disks
         ]
         previous = dict(runtime_data.disks)
+        previous_host = runtime_data.host
+        if host is not None:
+            runtime_data.host = host
         for disk in disks:
             runtime_data.disks[disk["serial"]] = disk
         _async_update_disk_devices(hass, entry, disks)
@@ -397,7 +417,7 @@ async def async_handle_webhook(
             new_pools = [pool["uuid"] for pool in pools if pool["uuid"] not in runtime_data.pools]
             runtime_data.pools = {pool["uuid"]: pool for pool in pools}
 
-        async_announce_changes(hass, entry, previous)
+        async_announce_changes(hass, entry, previous, previous_host)
 
         command_results = payload.get("command_results")
         async_update_alerts(

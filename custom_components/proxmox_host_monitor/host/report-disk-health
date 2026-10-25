@@ -1,13 +1,17 @@
 #!/usr/bin/python3 -I
-"""Report SMART and Btrfs disk health to Home Assistant (Proxmox Host Monitor).
+"""Report disk, storage and host health to Home Assistant (Proxmox Host Monitor).
 
 Runs from proxmox-host-monitor-disks.timer and immediately when smartd raises
 a warning. The evaluation is deliberately strict: every pending or
 uncorrectable sector and every Btrfs device error counts as critical.
 """
 
+from datetime import datetime, timezone
+import glob
 import json
 import re
+import socket
+import time
 import subprocess
 import sys
 import urllib.request
@@ -32,6 +36,16 @@ ATA_CHECKS = {
 }
 
 RANK = {"ok": 0, "warning": 1, "critical": 2}
+
+DAY = 24 * 3600
+SCRUB_MAX_AGE = 35 * DAY
+BACKUP_MAX_AGE = 8 * DAY
+CERT_WARNING = 30 * DAY
+THIN_WARNING = 80
+THIN_CRITICAL = 90
+# Host temperature limits when the sensor does not provide its own.
+HOST_TEMP_WARNING = 85
+HOST_TEMP_CRITICAL = 95
 
 
 def smartctl(*args):
@@ -281,6 +295,7 @@ def btrfs_pools(mounts, serials):
             "balance_progress": balance_progress(balance),
             "devices": devices,
             "operations": removal_operations(),
+            "scrub": scrub_status(mount),
         })
     return pools
 
@@ -289,6 +304,43 @@ def balance_progress(status):
     """Return the share of a running balance that is done, in percent."""
     match = re.search(r"(\d+)% left", status)
     return 100 - int(match.group(1)) if match else None
+
+
+def scrub_status(mount):
+    """Return the result of the last scrub, or None if there never was one."""
+    status = run("btrfs", "scrub", "status", "-R", mount).stdout
+    started = re.search(r"Scrub started:\s+(.+)", status)
+    if not started:
+        return None
+    try:
+        last = datetime.strptime(started.group(1).strip(), "%a %b %d %H:%M:%S %Y").timestamp()
+    except ValueError:
+        last = None
+    duration = re.search(r"Duration:\s+(\d+):(\d+):(\d+)", status)
+    state = re.search(r"Status:\s+(\w+)", status)
+
+    def count(name):
+        match = re.search(rf"{name}:\s+(\d+)", status)
+        return int(match.group(1)) if match else 0
+
+    return {
+        "last": last,
+        "status": state.group(1) if state else None,
+        "duration": int(duration.group(1)) * 3600 + int(duration.group(2)) * 60
+        + int(duration.group(3)) if duration else None,
+        "errors": sum(count(n) for n in ("read_errors", "csum_errors", "verify_errors", "super_errors")),
+        "corrected": count("corrected_errors"),
+        "uncorrectable": count("uncorrectable_errors"),
+    }
+
+
+def kernel_io_errors():
+    """Return the failed I/O requests per disk in the kernel log of the last day."""
+    log = run("journalctl", "-k", "--since", "-24h", "-o", "cat", "--no-pager").stdout
+    errors = {}
+    for name in re.findall(r"I/O error, dev (nvme\d+|[a-z]+)", log):
+        errors[name] = errors.get(name, 0) + 1
+    return errors
 
 
 REMOVE_UNIT = "proxmox-host-monitor-remove-"
@@ -352,6 +404,224 @@ def execute(command, pools):
     return "started" if result.returncode == 0 else result.stderr.strip()
 
 
+def read(path, default=None):
+    try:
+        with open(path, encoding="utf-8") as file:
+            return file.read().strip()
+    except OSError:
+        return default
+
+
+def hwmon():
+    """Return host temperatures and fans; disks are covered by SMART."""
+    temperatures, fans = [], []
+    for chip in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+        name = read(f"{chip}/name", "")
+        if name in ("nvme", "drivetemp"):
+            continue
+        for path in sorted(glob.glob(f"{chip}/temp*_input")):
+            base = path.removesuffix("_input")
+            value = read(path)
+            if value is None or not value.lstrip("-").isdigit():
+                continue
+            limits = {}
+            for limit in ("max", "crit"):
+                raw = read(f"{base}_{limit}")
+                # Some drivers report nonsense like 65261 °C instead of no limit.
+                if raw and raw.lstrip("-").isdigit() and 0 < int(raw) / 1000 < 150:
+                    limits[limit] = int(raw) / 1000
+            temperatures.append({
+                "chip": name,
+                "label": read(f"{base}_label") or base.rsplit("/", 1)[1],
+                "value": int(value) / 1000,
+                **limits,
+            })
+        for path in sorted(glob.glob(f"{chip}/fan*_input")):
+            base = path.removesuffix("_input")
+            value = read(path)
+            if value is not None and value.isdigit():
+                fans.append({
+                    "chip": name,
+                    "label": read(f"{base}_label") or base.rsplit("/", 1)[1],
+                    "rpm": int(value),
+                })
+    return temperatures, fans
+
+
+def thin_pools():
+    data = run("lvs", "--reportformat", "json", "-o",
+               "vg_name,lv_name,lv_attr,data_percent,metadata_percent").stdout
+    try:
+        lvs = json.loads(data)["report"][0]["lv"]
+    except (ValueError, KeyError, IndexError):
+        return []
+    return [
+        {
+            "name": f"{lv['vg_name']}/{lv['lv_name']}",
+            "data_percent": float(lv["data_percent"] or 0),
+            "metadata_percent": float(lv["metadata_percent"] or 0),
+        }
+        for lv in lvs
+        if lv.get("lv_attr", "").startswith("t")
+    ]
+
+
+def nics():
+    """Return physical network interfaces."""
+    result = []
+    for path in sorted(glob.glob("/sys/class/net/*/device")):
+        iface = path.split("/")[-2]
+        base = f"/sys/class/net/{iface}"
+        speed = read(f"{base}/speed")
+        result.append({
+            "name": iface,
+            "state": read(f"{base}/operstate"),
+            "speed": int(speed) if speed and speed.isdigit() and int(speed) > 0 else None,
+            "rx_errors": int(read(f"{base}/statistics/rx_errors", "0")),
+            "tx_errors": int(read(f"{base}/statistics/tx_errors", "0")),
+        })
+    return result
+
+
+def backups():
+    """Return the number of backup jobs and the last vzdump task of this node."""
+    def pvesh(path, *args):
+        try:
+            return json.loads(run("pvesh", "get", path, *args, "--output-format", "json").stdout)
+        except ValueError:
+            return None
+
+    jobs = pvesh("/cluster/backup")
+    tasks = pvesh(f"/nodes/{socket.gethostname()}/tasks", "--typefilter", "vzdump", "--limit", "1")
+    last = tasks[0] if tasks else None
+    return {
+        "jobs": len(jobs) if isinstance(jobs, list) else None,
+        "last": last.get("endtime") or last.get("starttime") if last else None,
+        "last_status": last.get("status") if last else None,
+    }
+
+
+def certificate_expires():
+    for path in ("/etc/pve/local/pveproxy-ssl.pem", "/etc/pve/local/pve-ssl.pem"):
+        out = run("openssl", "x509", "-enddate", "-noout", "-in", path).stdout
+        if match := re.search(r"notAfter=(.+)", out):
+            try:
+                return datetime.strptime(match.group(1).strip(), "%b %d %H:%M:%S %Y %Z").replace(
+                    tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                return None
+    return None
+
+
+def unattended_upgrades():
+    log = read("/var/log/unattended-upgrades/unattended-upgrades.log", "")
+    results = re.findall(r"^(\S+ \S+),\d+ \w+ upgrade result: (\w+)", log, re.M)
+    if not results:
+        return None
+    when, ok = results[-1]
+    return {
+        "last": datetime.strptime(when, "%Y-%m-%d %H:%M:%S").timestamp(),
+        "success": ok == "True",
+    }
+
+
+def host_report(pools):
+    """Return host information and its problems."""
+    now = time.time()
+    problems = []
+
+    def problem(code, severity, item=None, value=None):
+        problems.append({"code": code, "severity": severity, "item": item, "value": value})
+
+    failed = [
+        unit for unit in re.findall(
+            r"^(\S+\.\w+)\s", run("systemctl", "list-units", "--state=failed",
+                                    "--plain", "--no-legend").stdout, re.M)
+        # Failed disk removals have their own repair issue.
+        if not unit.startswith(REMOVE_UNIT)
+    ]
+    for unit in failed:
+        problem("failed_unit", "warning", unit)
+
+    for pool in pools:
+        scrub = pool.get("scrub")
+        if scrub is None or scrub.get("last") is None:
+            problem("scrub_never", "warning", pool["mount"])
+        elif now - scrub["last"] > SCRUB_MAX_AGE:
+            problem("scrub_overdue", "warning", pool["mount"], int((now - scrub["last"]) / DAY))
+        if scrub and scrub.get("uncorrectable"):
+            problem("scrub_uncorrectable", "critical", pool["mount"], scrub["uncorrectable"])
+        elif scrub and scrub.get("errors"):
+            problem("scrub_errors", "warning", pool["mount"], scrub["errors"])
+
+    backup = backups()
+    if backup["jobs"] == 0:
+        problem("backup_missing", "warning")
+    elif backup["last"] is None:
+        problem("backup_never", "warning")
+    else:
+        if backup["last_status"] not in (None, "OK"):
+            problem("backup_failed", "warning", None, backup["last_status"])
+        if now - backup["last"] > BACKUP_MAX_AGE:
+            problem("backup_overdue", "warning", None, int((now - backup["last"]) / DAY))
+
+    temperatures, fans = hwmon()
+    for sensor in temperatures:
+        item = f"{sensor['chip']} {sensor['label']}"
+        critical = sensor.get("crit", HOST_TEMP_CRITICAL)
+        warning = sensor.get("max", HOST_TEMP_WARNING)
+        if sensor["value"] >= critical:
+            problem("temperature", "critical", item, sensor["value"])
+        elif sensor["value"] >= warning:
+            problem("temperature", "warning", item, sensor["value"])
+
+    pools_lvm = thin_pools()
+    for pool in pools_lvm:
+        usage = max(pool["data_percent"], pool["metadata_percent"])
+        if usage >= THIN_CRITICAL:
+            problem("thin_pool_full", "critical", pool["name"], round(usage, 1))
+        elif usage >= THIN_WARNING:
+            problem("thin_pool_full", "warning", pool["name"], round(usage, 1))
+
+    interfaces = nics()
+    for nic in interfaces:
+        if nic["rx_errors"] or nic["tx_errors"]:
+            problem("nic_errors", "warning", nic["name"], nic["rx_errors"] + nic["tx_errors"])
+
+    certificate = certificate_expires()
+    if certificate is not None and certificate < now:
+        problem("certificate_expired", "critical")
+    elif certificate is not None and certificate - now < CERT_WARNING:
+        problem("certificate_expiring", "warning", None, int((certificate - now) / DAY))
+
+    synced = run("timedatectl", "show", "-p", "NTPSynchronized", "--value").stdout.strip()
+    if synced == "no":
+        problem("time_not_synchronized", "warning")
+
+    upgrades = unattended_upgrades()
+    if upgrades and not upgrades["success"]:
+        problem("unattended_upgrades_failed", "warning")
+
+    status = "ok"
+    for entry in problems:
+        if RANK[entry["severity"]] > RANK[status]:
+            status = entry["severity"]
+
+    return {
+        "status": status,
+        "problems": problems,
+        "failed_units": failed,
+        "backup": backup,
+        "temperatures": temperatures,
+        "fans": fans,
+        "thin_pools": pools_lvm,
+        "nics": interfaces,
+        "certificate_expires": certificate,
+        "time_synchronized": synced == "yes" if synced else None,
+        "unattended_upgrades": upgrades,
+    }
+
+
 def post(payload):
     with open(WEBHOOK_URL_FILE, encoding="utf-8") as file:
         url = file.read().strip()
@@ -379,8 +649,18 @@ def main():
                 )
                 disk["status"] = "critical"
 
+    io_errors = kernel_io_errors()
+    for disk in disks:
+        disk["io_errors_24h"] = io_errors.get(disk["name"], 0)
+        if disk["io_errors_24h"]:
+            disk["problems"].append(
+                {"code": "io_errors", "severity": "warning", "value": disk["io_errors_24h"]}
+            )
+            if disk["status"] == "ok":
+                disk["status"] = "warning"
+
     pools = btrfs_pools(mounts, {disk["name"]: disk["serial"] for disk in disks})
-    payload = {"disks": disks, "pools": pools}
+    payload = {"disks": disks, "pools": pools, "host": host_report(pools)}
     if "--dry-run" in sys.argv:
         print(json.dumps(payload, indent=1))
         return

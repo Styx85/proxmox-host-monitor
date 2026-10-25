@@ -60,6 +60,17 @@ Then run `systemctl restart smartd`; `smartd -q showtests` lists the next tests.
 
 Every health change of a disk, a Btrfs filesystem or the host and every start and end of a balance or disk removal is written to the logbook with its reason, for example *Btrfs storage: health critical: critical: sde · warning: sdd* or *balance running (86 % done)*. The changed states are linked to that entry, so *What happened* in the activity details shows the reason. After a restart the current problems are written again.
 
+**Host health**
+
+- *Host problem* on the Proxmox node lists everything that needs attention on the host itself, each also as a repair issue:
+  - failed systemd services,
+  - no backup job, no backup yet, last backup failed or older than 8 days,
+  - Btrfs scrub never run, older than 35 days, or with (uncorrectable) errors,
+  - temperatures above the sensor's limit (or 85 °C / 95 °C),
+  - LVM thin pools above 80 % / 90 % (data or metadata),
+  - network interface errors, an expiring or expired web interface certificate, an unsynchronized clock and failed automatic updates.
+- Sensors for failed services, last backup, temperatures and fans of the host (CPU, mainboard, GPU), LVM thin pools, link speed of the network interfaces, certificate expiry and the last run of unattended-upgrades; last scrub per Btrfs filesystem; kernel I/O errors of the last 24 hours per disk.
+
 **Notifications**
 
 Disk failures, low space and removals fire the event `proxmox_host_monitor_alert`, so you can send push notifications, see [Notifications](#notifications).
@@ -102,6 +113,7 @@ The integration fires `proxmox_host_monitor_alert` once per situation:
 | `pool_space_low` | `pool`, `free_gb`, `percentage` |
 | `removal_requested`, `removal_started`, `removal_finished` | `disk`, `serial`, `pool` |
 | `removal_failed` | `disk`, `serial`, `reason` |
+| `host_problem` | `code`, `item`, `value`, `severity` |
 
 Example automation for a push notification:
 
