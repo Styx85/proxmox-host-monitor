@@ -4,7 +4,7 @@
 
 # Proxmox Host Monitor
 
-Home Assistant integration that watches a Proxmox VE host from the inside: pending reboots and disk health.
+Home Assistant integration that watches a Proxmox VE host from the inside: pending reboots, disk health and Btrfs storage, including removing a failing disk from Home Assistant.
 
 It complements the core [Proxmox VE integration](https://www.home-assistant.io/integrations/proxmoxve/), which reads the Proxmox API. Proxmox Host Monitor covers what the API does not show, using two small scripts on the host that report to Home Assistant through a local webhook.
 
@@ -34,6 +34,21 @@ The evaluation is deliberately strict:
 | critical | SMART failed, failure predicted, pending or offline uncorrectable sectors, reported uncorrectable errors, Btrfs device errors, NVMe critical warning, media errors or spare below threshold, temperature ≥ 55 °C |
 | warning | reallocated sectors, CRC errors, command timeouts, errors in the SMART error log, failed self-test, attribute below threshold in the past, NVMe wear ≥ 80 %, temperature ≥ 50 °C |
 
+**Btrfs storage and failing disks**
+
+- One device per Btrfs filesystem with free space, usage and whether a balance or a disk removal is running.
+- Every report checks for each disk whether the data of its filesystem would still fit on the other disks (respecting the RAID profiles and a safety margin). The result is shown as *Removable* on the disk.
+- A critical disk raises a repair issue under **Settings → System → Repairs**:
+  - **Removable**: confirm the repair to remove the disk from the filesystem. The host moves its data to the other disks with `btrfs device remove` and reports the progress. The host checks again before it starts and refuses while a balance runs or if the space no longer suffices.
+  - **Not enough space**: the issue tells you how much space is missing and the minimum size of a new disk to buy.
+  - **Balance running**: removal becomes possible once the balance has finished.
+- A filesystem with less than 10 % free space raises a warning.
+- Home Assistant never connects to the host for this. The removal request is handed to the host with the response to its next report (within 5 minutes).
+
+**Notifications**
+
+Disk failures, low space and removals fire the event `proxmox_host_monitor_alert`, so you can send push notifications, see [Notifications](#notifications).
+
 **Setup from Home Assistant**
 
 - The host scripts are installed from the setup dialog, either automatically over SSH or with a one-line command.
@@ -62,17 +77,54 @@ pveum acl modify / -user ha-monitor@pve -role HAMonitor
 
 An ACL on a deeper path such as `/nodes/<node>` replaces the privileges inherited from `/` for the same user. If you add a node-specific role there (for example `Sys.Modify` for the Proxmox VE package update entity), assign `HAMonitor` on that path as well.
 
+## Notifications
+
+The integration fires `proxmox_host_monitor_alert` once per situation:
+
+| `type` | Data |
+|---|---|
+| `disk_failing` | `disk`, `model`, `serial`, `problems`, `pool`, `removable`, `balance_running`, `missing_gb`, `recommended_gb` |
+| `pool_space_low` | `pool`, `free_gb`, `percentage` |
+| `removal_requested`, `removal_started`, `removal_finished` | `disk`, `serial`, `pool` |
+| `removal_failed` | `disk`, `serial`, `reason` |
+
+Example automation for a push notification:
+
+```yaml
+triggers:
+  - trigger: event
+    event_type: proxmox_host_monitor_alert
+actions:
+  - action: notify.mobile_app_my_phone
+    data:
+      title: "Proxmox: {{ trigger.event.data.type | replace('_', ' ') }}"
+      message: >
+        {% set d = trigger.event.data %}
+        {% if d.type == 'disk_failing' %}
+          {{ d.disk }} ({{ d.model }}) is failing: {{ d.problems | join(', ') }}.
+          {% if d.removable %}It can be removed from {{ d.pool }} under Settings → Repairs.
+          {% elif d.missing_gb %}Buy a new disk of at least {{ d.recommended_gb }} GB.{% endif %}
+        {% elif d.type == 'pool_space_low' %}
+          Only {{ d.free_gb }} GB ({{ d.percentage }} %) free on {{ d.pool }}.
+        {% else %}
+          {{ d.disk }} {{ d.pool or '' }} {{ d.reason or '' }}
+        {% endif %}
+      data:
+        priority: high
+        ttl: 0
+```
+
 ## What is installed on the host
 
 | Path | Purpose |
 |---|---|
 | `/usr/local/sbin/proxmox-host-monitor-reboot` | reports the reboot status |
-| `/usr/local/sbin/proxmox-host-monitor-disks` | reports SMART and Btrfs disk health (`--dry-run` prints the report) |
+| `/usr/local/sbin/proxmox-host-monitor-disks` | reports SMART and Btrfs disk health and filesystems, runs confirmed disk removals (`--dry-run` prints the report) |
 | `/etc/systemd/system/proxmox-host-monitor-{reboot,disks}.{service,timer}` | every 5 and 15 minutes |
 | `/etc/smartmontools/run.d/60proxmox-host-monitor` | immediate report on smartd warnings |
 | `/etc/proxmox-host-monitor/` | webhook URL and installed version |
 
-`smartmontools` is installed if missing.
+`smartmontools` is installed if missing. Disk removals run as transient units `proxmox-host-monitor-remove-<serial>`.
 
 ### Existing installations
 
@@ -105,7 +157,7 @@ systemctl daemon-reload
 
 ## Webhook payload
 
-Custom scripts can report to the same webhook (`POST`, JSON, local network only). Both keys are optional, but at least one is required:
+Custom scripts can report to the same webhook (`POST`, JSON, local network only). All keys are optional, but `required` or `disks` is required:
 
 ```json
 {
@@ -124,7 +176,7 @@ Custom scripts can report to the same webhook (`POST`, JSON, local network only)
 }
 ```
 
-`status` is `ok`, `warning` or `critical`. Each disk report replaces the previous one; disks missing from it become unavailable. Without a report for 15 minutes (reboot) or 45 minutes (disks) the entities become unavailable.
+`status` is `ok`, `warning` or `critical`. `pools` describes Btrfs filesystems, see `report-disk-health` for the format. The response to a disk report can contain `commands` for the host. Each disk report replaces the previous one; disks missing from it become unavailable. Without a report for 15 minutes (reboot) or 45 minutes (disks) the entities become unavailable.
 
 ## Translations
 

@@ -126,6 +126,12 @@
     "binary_sensor": {
       "disk_problem": {
         "name": "Festplattenproblem"
+      },
+      "removable": {
+        "name": "Ausbau möglich"
+      },
+      "pool_operation": {
+        "name": "Vorgang läuft"
       }
     },
     "sensor": {
@@ -174,6 +180,12 @@
       },
       "power_on_hours": {
         "name": "Betriebszeit"
+      },
+      "pool_free": {
+        "name": "Freier Speicher"
+      },
+      "pool_used": {
+        "name": "Belegt"
       }
     }
   },
@@ -194,6 +206,41 @@
           "entry_not_found": "Proxmox Host Monitor ist nicht mehr eingerichtet."
         }
       }
+    },
+    "disk_failing": {
+      "title": "Festplatte {disk} fällt aus",
+      "description": "Die Festplatte **{disk}** ({model}, Seriennummer {serial}) meldet kritische Probleme: {problems}.\n\nDie Platte gehört zu keinem von Proxmox Host Monitor überwachten Btrfs-Dateisystem. Sichere ihre Daten und tausche sie aus."
+    },
+    "disk_failing_removable": {
+      "title": "Festplatte {disk} fällt aus und kann entfernt werden",
+      "fix_flow": {
+        "step": {
+          "confirm_removal": {
+            "title": "{disk} aus {pool} entfernen?",
+            "description": "Die Festplatte **{disk}** ({model}, Seriennummer {serial}) meldet kritische Probleme: {problems}.\n\nDer Proxmox-Host führt `btrfs device remove` für **{disk}** ({model}, Seriennummer {serial}) aus. Alle Daten darauf werden zuerst auf die anderen Platten von `{pool}` verschoben. Das kann Stunden dauern und bremst das Dateisystem so lange. Der Host prüft vor dem Start erneut und lehnt ab, wenn es nicht mehr sicher ist.\n\nDer Host holt den Auftrag innerhalb von 5 Minuten ab. Danach kann die Platte abgeklemmt werden."
+          }
+        },
+        "abort": {
+          "entry_not_found": "Proxmox Host Monitor ist nicht mehr eingerichtet.",
+          "pool_not_found": "Das Dateisystem wird vom Host nicht mehr gemeldet."
+        }
+      }
+    },
+    "disk_failing_wait": {
+      "title": "Festplatte {disk} fällt aus",
+      "description": "Die Festplatte **{disk}** ({model}, Seriennummer {serial}) meldet kritische Probleme: {problems}.\n\nDie Daten von `{pool}` passen auf die übrigen Platten, aber gerade läuft ein Balance. Sobald er fertig ist, kann die Platte aus Home Assistant heraus entfernt werden."
+    },
+    "disk_failing_no_space": {
+      "title": "Festplatte {disk} fällt aus: neue Platte kaufen",
+      "description": "Die Festplatte **{disk}** ({model}, Seriennummer {serial}) meldet kritische Probleme: {problems}.\n\nDie übrigen Platten von `{pool}` sind zu klein, um ihre Daten aufzunehmen: Es fehlen etwa **{missing} GB**. Füge so bald wie möglich eine neue Platte mit mindestens **{recommended} GB** zum Dateisystem hinzu und entferne danach {disk}."
+    },
+    "pool_space_low": {
+      "title": "Dateisystem {pool} wird voll",
+      "description": "Von `{pool}` sind nur noch **{free} GB** ({percentage} %) frei. Schaffe Platz oder füge eine Platte hinzu."
+    },
+    "removal_failed": {
+      "title": "Entfernen der Festplatte {disk} fehlgeschlagen",
+      "description": "Das Entfernen der Festplatte **{disk}** (Seriennummer {serial}) ist nicht gelungen: {reason}.\n\nPrüfe auf dem Proxmox-Host `journalctl -u proxmox-host-monitor-remove-{serial}`."
     }
   },
   "exceptions": {

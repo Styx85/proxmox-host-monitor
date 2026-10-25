@@ -214,7 +214,12 @@ async def test_combined_report(hass, entry, hass_client_no_auth):
     resp = await client.post(
         f"/api/webhook/{WEBHOOK_ID}", json={"required": True, "disks": [HEALTHY]}
     )
-    assert await resp.json() == {"ok": True, "required": True, "disks": 1}
+    assert await resp.json() == {
+        "ok": True,
+        "required": True,
+        "pending_commands": False,
+        "disks": 1,
+    }
 
 
 async def test_remove_absent_disk_device(hass, entry, hass_client_no_auth):

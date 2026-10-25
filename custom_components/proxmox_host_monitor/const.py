@@ -14,6 +14,10 @@ CONF_HOST_KEY = "host_key"
 SIGNAL_REBOOT_STATUS = f"{DOMAIN}_reboot_status"
 SIGNAL_DISK_REPORT = f"{DOMAIN}_disk_report"
 SIGNAL_NEW_DISKS = f"{DOMAIN}_new_disks"
+SIGNAL_NEW_POOLS = f"{DOMAIN}_new_pools"
+
+# Fired for disk failures, low space and disk removals (for notifications).
+EVENT_ALERT = f"{DOMAIN}_alert"
 
 # The Proxmox timer reports every five minutes; allow two missed reports.
 STATUS_TIMEOUT = timedelta(minutes=15)
@@ -36,3 +40,14 @@ INSTALL_URL = "/api/proxmox_host_monitor/install/{webhook_id}"
 PENDING_INSTALLS = "pending_installs"
 
 ISSUE_REBOOT_BUTTON_UNAVAILABLE = "reboot_button_unavailable"
+ISSUE_DISK_FAILING = "disk_failing_{serial}"
+ISSUE_POOL_SPACE_LOW = "pool_space_low_{uuid}"
+ISSUE_REMOVAL_FAILED = "removal_failed_{serial}"
+
+# A Btrfs pool with less free space than this share of its size is low on space.
+POOL_FREE_WARNING = 0.10
+
+ACTION_BTRFS_REMOVE = "btrfs_remove"
+
+# Device identifier prefix of Btrfs pools (disks use their serial number).
+POOL_PREFIX = "pool_"
