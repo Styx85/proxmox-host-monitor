@@ -252,3 +252,33 @@ async def test_removable_added_with_later_pool(hass, entry, report):
     await report({"disks": [GOOD, BAD], "pools": [_pool()]})
     assert _state(hass, "binary_sensor", "disk_BAD_removable").state == "on"
     assert _state(hass, "binary_sensor", "disk_GOOD_removable").state == "on"
+
+
+async def test_pool_lists_critical_and_warning_disks(hass, entry, report):
+    """The pool shows which of its disks are critical and which have warnings."""
+    warn = {
+        "name": "sdd",
+        "model": "WD400EB",
+        "serial": "WARN",
+        "status": "warning",
+        "problems": [{"code": "reallocated_sectors", "severity": "warning", "value": 9}],
+    }
+    other = {"name": "sdx", "model": "X", "serial": "OTHER", "status": "critical", "problems": []}
+    pool = _pool()
+    pool["devices"].append({"devid": 4, "name": "sdd", "serial": "WARN", "missing_after_removal": 0})
+    await report({"disks": [GOOD, BAD, warn, other], "pools": [pool]})
+
+    problem = _state(hass, "binary_sensor", f"pool_{UUID}_problem")
+    assert problem.state == "on"
+    assert problem.attributes["critical"] == ["sde"]
+    assert problem.attributes["warning"] == ["sdd"]
+    assert problem.attributes["problems"] == [
+        "sde pending_sectors: 1414",
+        "sdd reallocated_sectors: 9",
+    ]
+    assert _state(hass, "sensor", f"pool_{UUID}_health").state == "critical"
+
+    healthy = deepcopy(BAD) | {"status": "ok", "problems": []}
+    await report({"disks": [GOOD, healthy, warn, other], "pools": [pool]})
+    assert _state(hass, "sensor", f"pool_{UUID}_health").state == "warning"
+    assert _state(hass, "binary_sensor", f"pool_{UUID}_problem").attributes["critical"] == []

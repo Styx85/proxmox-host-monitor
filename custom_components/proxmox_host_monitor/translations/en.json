@@ -132,6 +132,20 @@
       },
       "pool_operation": {
         "name": "Operation running"
+      },
+      "pool_problem": {
+        "name": "Disk problem",
+        "state_attributes": {
+          "critical": {
+            "name": "Critical"
+          },
+          "warning": {
+            "name": "Warning"
+          },
+          "problems": {
+            "name": "Problems"
+          }
+        }
       }
     },
     "sensor": {
@@ -186,6 +200,41 @@
       },
       "pool_used": {
         "name": "Used"
+      },
+      "pool_health": {
+        "name": "Disk health",
+        "state": {
+          "ok": "OK",
+          "warning": "Warning",
+          "critical": "Critical"
+        }
+      },
+      "self_test_age": {
+        "name": "Last self-test"
+      },
+      "capacity": {
+        "name": "Capacity"
+      },
+      "age": {
+        "name": "Age"
+      },
+      "power_cycles": {
+        "name": "Power cycles"
+      },
+      "start_stop_count": {
+        "name": "Start/stop count"
+      },
+      "load_cycles": {
+        "name": "Load cycles"
+      },
+      "pool_data": {
+        "name": "Data"
+      },
+      "pool_size": {
+        "name": "Raw size"
+      },
+      "pool_devices": {
+        "name": "Disks"
       }
     }
   },

@@ -65,3 +65,47 @@ async def test_fits():
     assert m.fits({"raid1": 300 * m.GIB}, [4 * T, 200 * m.GIB]) > 0
     assert m.fits({"raid1c3": 10 * m.GIB}, [T, T]) > 0
     assert m.fits({"raid5": 1500 * m.GIB}, [T, T, T]) == 0
+
+
+def _smart(hours, tests, supported=True):
+    return {
+        "model_name": "X",
+        "serial_number": "S",
+        "smart_status": {"passed": True},
+        "power_on_time": {"hours": hours},
+        "ata_smart_data": {"capabilities": {"self_tests_supported": supported}},
+        "ata_smart_self_test_log": {"standard": {"table": tests}},
+    }
+
+
+async def test_self_test_overdue():
+    """A missing or old self-test is a warning when the disk supports tests."""
+    test = {"type": {"string": "Short offline"}, "status": {"string": "Completed without error", "passed": True}}
+    cases = [
+        (_smart(1000, [test | {"lifetime_hours": 990}]), []),
+        (_smart(1000, [test | {"lifetime_hours": 500}]), [("self_test_overdue", 500)]),
+        (_smart(1000, []), [("self_test_overdue", None)]),
+        (_smart(1000, [], supported=False), []),
+    ]
+    for data, expected in cases:
+        m.smartctl = lambda *args, data=data: (data, 0)
+        disk = m.check_disk({"name": "/dev/sda", "type": "sat"})
+        assert [(p["code"], p["value"]) for p in disk["problems"]] == expected
+        assert disk["status"] == ("warning" if expected else "ok")
+
+
+async def test_disk_info_ssd():
+    """NVMe disks report as solid state with their power cycles."""
+    info = m.disk_info(
+        {
+            "firmware_version": "2B2QEXM7",
+            "nvme_total_capacity": 500107862016,
+            "nvme_smart_health_information_log": {"power_cycles": 57},
+            "nvme_optional_admin_commands": {"self_test": True},
+            "device": {"protocol": "NVMe"},
+        }
+    )
+    assert info["rotation_rate"] == 0
+    assert info["power_cycles"] == 57
+    assert info["capacity"] == 500107862016
+    assert info["self_test_supported"] is True

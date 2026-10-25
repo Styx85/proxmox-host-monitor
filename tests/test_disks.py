@@ -231,3 +231,39 @@ async def test_remove_absent_disk_device(hass, entry, hass_client_no_auth):
     await _report(hass_client_no_auth, hass, [HEALTHY])
     assert await async_remove_config_entry_device(hass, entry, failing)
     assert "WD-WMATV1460428" not in entry.runtime_data.disks
+
+
+async def test_disk_info(hass, entry, hass_client_no_auth):
+    """General disk information becomes sensors, attributes and device info."""
+    disk = deepcopy(HEALTHY) | {
+        "model_family": "Seagate SkyHawk",
+        "firmware": "CV10",
+        "capacity": 4000787030016,
+        "protocol": "ATA",
+        "interface": "SATA 3.1",
+        "rotation_rate": 5400,
+        "form_factor": "3.5 inches",
+        "smart_passed": True,
+        "power_cycles": 45,
+        "start_stop_count": 119,
+        "load_cycles": 1285,
+        "power_on_hours": 17532,
+        "self_test": {"type": "Short offline", "result": "Completed without error", "passed": True, "hours_ago": 5},
+    }
+    await _report(hass_client_no_auth, hass, [disk])
+
+    assert float(hass.states.get(_entity_id(hass, "disk_WW6099YV_age")).state) == 2.0
+    assert hass.states.get(_entity_id(hass, "disk_WW6099YV_power_cycles")).state == "45"
+    self_test = hass.states.get(_entity_id(hass, "disk_WW6099YV_self_test_age"))
+    assert self_test.state == "5"
+    assert self_test.attributes["result"] == "Completed without error"
+    assert float(hass.states.get(_entity_id(hass, "disk_WW6099YV_capacity")).state) == pytest.approx(4000.787, 0.001)
+
+    health = hass.states.get(_entity_id(hass, "disk_WW6099YV_health")).attributes
+    assert health["device"] == "/dev/sda"
+    assert health["rotation_rate"] == 5400
+    assert health["interface"] == "SATA 3.1"
+
+    device = _disk_device(hass, entry, "WW6099YV")
+    assert device.sw_version == "CV10"
+    assert device.model_id == "Seagate SkyHawk"

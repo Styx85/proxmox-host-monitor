@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import ProxmoxHostConfigEntry
-from .const import DISK_STATUS_OK
+from .const import DISK_STATUS_CRITICAL, DISK_STATUS_OK, DISK_STATUS_WARNING
 from .alerts import find_pool_device
 from .entity import (
     ProxmoxDiskEntity,
@@ -37,6 +37,12 @@ DISK_PROBLEM = BinarySensorEntityDescription(
 DISK_REMOVABLE = BinarySensorEntityDescription(
     key="removable",
     translation_key="removable",
+)
+
+POOL_PROBLEM = BinarySensorEntityDescription(
+    key="problem",
+    translation_key="pool_problem",
+    device_class=BinarySensorDeviceClass.PROBLEM,
 )
 
 POOL_OPERATION = BinarySensorEntityDescription(
@@ -80,7 +86,10 @@ async def async_setup_entry(
         hass,
         entry,
         async_add_entities,
-        lambda uuid: [ProxmoxPoolOperationSensor(entry, uuid, POOL_OPERATION)]
+        lambda uuid: [
+            ProxmoxPoolOperationSensor(entry, uuid, POOL_OPERATION),
+            ProxmoxPoolProblemSensor(entry, uuid, POOL_PROBLEM),
+        ]
         + _removable(
             [device.get("serial", "") for device in runtime_data.pools[uuid].get("devices", [])]
         ),
@@ -167,5 +176,32 @@ class ProxmoxPoolOperationSensor(ProxmoxPoolEntity, BinarySensorEntity):
                 operation.get("serial")
                 for operation in self.pool.get("operations", [])
                 if operation.get("state") == "running"
+            ],
+        }
+
+
+class ProxmoxPoolProblemSensor(ProxmoxPoolEntity, BinarySensorEntity):
+    """On while a disk of the filesystem reports a problem."""
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether any disk of the filesystem has a problem."""
+        return any(disk["status"] != DISK_STATUS_OK for disk in self.member_disks)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the critical and warning disks and their problems."""
+        disks = self.member_disks
+        return {
+            DISK_STATUS_CRITICAL: [
+                disk["name"] for disk in disks if disk["status"] == DISK_STATUS_CRITICAL
+            ],
+            DISK_STATUS_WARNING: [
+                disk["name"] for disk in disks if disk["status"] == DISK_STATUS_WARNING
+            ],
+            "problems": [
+                f"{disk['name']} {problem}"
+                for disk in disks
+                for problem in format_problems(disk)
             ],
         }

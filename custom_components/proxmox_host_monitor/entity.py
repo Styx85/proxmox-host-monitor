@@ -108,6 +108,8 @@ class ProxmoxDiskEntity(ProxmoxHostEntity):
             identifiers={(DOMAIN, serial)},
             name=f"{model} {serial}",
             model=self.disk.get("model") or None,
+            model_id=self.disk.get("model_family") or None,
+            sw_version=self.disk.get("firmware") or None,
             serial_number=serial,
             **_via_node(entry),
         )
@@ -148,6 +150,17 @@ class ProxmoxPoolEntity(ProxmoxHostEntity):
     def pool(self) -> dict[str, Any]:
         """Return the latest data of this filesystem."""
         return self._entry.runtime_data.pools[self._uuid]
+
+    @property
+    def member_disks(self) -> list[dict[str, Any]]:
+        """Return the reported disks that belong to this filesystem."""
+        runtime_data = self._entry.runtime_data
+        serials = [device.get("serial") for device in self.pool.get("devices", [])]
+        return [
+            runtime_data.disks[serial]
+            for serial in serials
+            if serial in runtime_data.present
+        ]
 
     @property
     def available(self) -> bool:
