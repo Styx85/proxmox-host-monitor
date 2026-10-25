@@ -33,12 +33,15 @@ from .const import (
     DOMAIN,
     ISSUE_REBOOT_BUTTON_UNAVAILABLE,
     LEGACY_DOMAIN,
+    POOL_PREFIX,
     SIGNAL_DISK_REPORT,
     SIGNAL_NEW_DISKS,
+    SIGNAL_NEW_POOLS,
     SIGNAL_REBOOT_STATUS,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
+from .alerts import async_update_alerts
 from .installer import async_register_install_view
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,6 +63,14 @@ class ProxmoxHostRuntimeData:
     # Serial numbers contained in the latest disk report.
     present: set[str] = field(default_factory=set)
     disks_reported_at: datetime | None = None
+    # Btrfs filesystems of the latest report, keyed by UUID.
+    pools: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Commands for the host, delivered with the next disk report.
+    commands: list[dict[str, Any]] = field(default_factory=list)
+    # Disk removals by serial: requested, running or done.
+    removals: dict[str, str] = field(default_factory=dict)
+    # Alerts already announced, so every alert fires once.
+    alerted: set[str] = field(default_factory=set)
     node_device: dr.DeviceEntry | None = None
     cancel_disk_timeout: CALLBACK_TYPE | None = None
 
@@ -97,6 +108,10 @@ async def async_setup_entry(
     if stored := await store.async_load():
         runtime_data.disks = stored.get("disks", {})
         runtime_data.present = set(stored.get("present", []))
+        runtime_data.pools = stored.get("pools", {})
+        runtime_data.commands = stored.get("commands", [])
+        runtime_data.removals = stored.get("removals", {})
+        runtime_data.alerted = set(stored.get("alerted", []))
         if reported_at := stored.get("reported_at"):
             runtime_data.disks_reported_at = dt_util.parse_datetime(reported_at)
     runtime_data.node_device = async_entity_id_to_device(
@@ -152,19 +167,23 @@ async def async_remove_config_entry_device(
     entry: ProxmoxHostConfigEntry,
     device_entry: dr.DeviceEntry,
 ) -> bool:
-    """Allow removing disks that are no longer reported."""
+    """Allow removing disks and pools that are no longer reported."""
     runtime_data = entry.runtime_data
-    serials = [
+    identifiers = [
         identifier
         for domain, identifier in device_entry.identifiers
         if domain == DOMAIN
     ]
-    if not serials or any(serial in runtime_data.present for serial in serials):
+    if not identifiers or any(
+        identifier in runtime_data.present
+        or identifier.removeprefix(POOL_PREFIX) in runtime_data.pools
+        for identifier in identifiers
+    ):
         return False
 
-    for serial in serials:
-        runtime_data.disks.pop(serial, None)
-    _async_save_disks(entry)
+    for identifier in identifiers:
+        runtime_data.disks.pop(identifier, None)
+    async_save(entry)
     return True
 
 
@@ -204,12 +223,16 @@ def _stored_data(runtime_data: ProxmoxHostRuntimeData) -> dict[str, Any]:
     return {
         "disks": runtime_data.disks,
         "present": sorted(runtime_data.present),
+        "pools": runtime_data.pools,
+        "commands": runtime_data.commands,
+        "removals": runtime_data.removals,
+        "alerted": sorted(runtime_data.alerted),
         "reported_at": reported_at.isoformat() if reported_at else None,
     }
 
 
 @callback
-def _async_save_disks(entry: ProxmoxHostConfigEntry) -> None:
+def async_save(entry: ProxmoxHostConfigEntry) -> None:
     """Persist the known disks so their entities survive a restart."""
     runtime_data = entry.runtime_data
     runtime_data.store.async_delay_save(lambda: _stored_data(runtime_data), 10)
@@ -237,6 +260,19 @@ def _schedule_disk_timeout(
         dt_util.utcnow() - runtime_data.disks_reported_at
     )
     runtime_data.cancel_disk_timeout = async_call_later(hass, remaining, _expired)
+
+
+def _valid_pools(pools: Any) -> bool:
+    """Return whether a pool report has the expected shape."""
+    return isinstance(pools, list) and all(
+        isinstance(pool, dict)
+        and isinstance(pool.get("uuid"), str)
+        and pool["uuid"]
+        and isinstance(pool.get("mount"), str)
+        and isinstance(pool.get("devices", []), list)
+        and isinstance(pool.get("operations", []), list)
+        for pool in pools
+    )
 
 
 def _valid_disks(disks: Any) -> bool:
@@ -295,6 +331,13 @@ async def async_handle_webhook(
             status=400,
         )
 
+    pools = payload.get("pools")
+    if "pools" in payload and not _valid_pools(pools):
+        return web.json_response(
+            {"error": "'pools' must be a list of pool objects"},
+            status=400,
+        )
+
     runtime_data = entry.runtime_data
     response: dict[str, Any] = {"ok": True}
 
@@ -302,6 +345,8 @@ async def async_handle_webhook(
         runtime_data.reboot_required = required
         runtime_data.status_received = True
         response["required"] = required
+        # Lets the host fetch queued commands without waiting for the disk timer.
+        response["pending_commands"] = bool(runtime_data.commands)
         async_dispatcher_send(hass, f"{SIGNAL_REBOOT_STATUS}_{entry.entry_id}")
 
     if disks is not None:
@@ -312,13 +357,34 @@ async def async_handle_webhook(
             runtime_data.disks[disk["serial"]] = disk
         runtime_data.present = {disk["serial"] for disk in disks}
         runtime_data.disks_reported_at = dt_util.utcnow()
-        _async_save_disks(entry)
         _schedule_disk_timeout(hass, entry)
         response["disks"] = len(disks)
+
+        new_pools: list[str] = []
+        if pools is not None:
+            new_pools = [pool["uuid"] for pool in pools if pool["uuid"] not in runtime_data.pools]
+            runtime_data.pools = {pool["uuid"]: pool for pool in pools}
+
+        command_results = payload.get("command_results")
+        async_update_alerts(
+            hass,
+            entry,
+            command_results if isinstance(command_results, list) else None,
+        )
+
+        # The disk report is the host's channel for commands.
+        if runtime_data.commands:
+            response["commands"] = runtime_data.commands
+            runtime_data.commands = []
+        async_save(entry)
 
         if new_serials:
             async_dispatcher_send(
                 hass, f"{SIGNAL_NEW_DISKS}_{entry.entry_id}", new_serials
+            )
+        if new_pools:
+            async_dispatcher_send(
+                hass, f"{SIGNAL_NEW_POOLS}_{entry.entry_id}", new_pools
             )
         async_dispatcher_send(hass, f"{SIGNAL_DISK_REPORT}_{entry.entry_id}")
 

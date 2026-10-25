@@ -1,12 +1,20 @@
 """Health and SMART sensors for the disks of the Proxmox host."""
 
+from typing import Any
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTemperature, UnitOfTime
+from homeassistant.const import (
+    PERCENTAGE,
+    EntityCategory,
+    UnitOfInformation,
+    UnitOfTemperature,
+    UnitOfTime,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -15,8 +23,11 @@ from .const import DISK_STATUSES
 from .entity import (
     ProxmoxDiskEntity,
     ProxmoxHostSummaryEntity,
+    ProxmoxPoolEntity,
     async_setup_disk_platform,
+    async_setup_pool_platform,
 )
+from .helpers import free_share
 
 SUMMARY_HEALTH = SensorEntityDescription(
     key="disk_health",
@@ -75,6 +86,25 @@ DISK_SENSORS = (
 )
 
 
+POOL_FREE = SensorEntityDescription(
+    key="free",
+    translation_key="pool_free",
+    device_class=SensorDeviceClass.DATA_SIZE,
+    native_unit_of_measurement=UnitOfInformation.BYTES,
+    suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
+    suggested_display_precision=0,
+    state_class=SensorStateClass.MEASUREMENT,
+)
+
+POOL_USED = SensorEntityDescription(
+    key="used_percentage",
+    translation_key="pool_used",
+    native_unit_of_measurement=PERCENTAGE,
+    suggested_display_precision=1,
+    state_class=SensorStateClass.MEASUREMENT,
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ProxmoxHostConfigEntry,
@@ -96,6 +126,15 @@ async def async_setup_entry(
         async_add_entities,
         lambda: [ProxmoxDisksHealthSensor(entry, SUMMARY_HEALTH)],
         _disk_entities,
+    )
+    async_setup_pool_platform(
+        hass,
+        entry,
+        async_add_entities,
+        lambda uuid: [
+            ProxmoxPoolFreeSensor(entry, uuid, POOL_FREE),
+            ProxmoxPoolUsedSensor(entry, uuid, POOL_USED),
+        ],
     )
 
 
@@ -125,3 +164,32 @@ class ProxmoxDiskValueSensor(ProxmoxDiskEntity, SensorEntity):
     def native_value(self) -> int | float | None:
         """Return the reported value."""
         return self.disk.get(self.entity_description.key)
+
+
+class ProxmoxPoolFreeSensor(ProxmoxPoolEntity, SensorEntity):
+    """Estimated free space of a Btrfs filesystem."""
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the free space as estimated by Btrfs."""
+        return self.pool.get("free")
+
+
+class ProxmoxPoolUsedSensor(ProxmoxPoolEntity, SensorEntity):
+    """Used share of a Btrfs filesystem."""
+
+    @property
+    def native_value(self) -> float | None:
+        """Return how much of the usable capacity is in use."""
+        if (share := free_share(self.pool)) is None:
+            return None
+        return round((1 - share) * 100, 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the mount point and profiles."""
+        return {
+            "mount": self.pool.get("mount"),
+            "profiles": self.pool.get("profiles", []),
+            "devices": [device.get("name") for device in self.pool.get("devices", [])],
+        }

@@ -105,35 +105,204 @@ def check_disk(dev):
     return disk
 
 
-def btrfs_errors():
-    """Return the summed Btrfs device error counters per disk name."""
-    # One mount point per filesystem; subvolume mounts share the counters.
-    mounts = {}
-    for line in subprocess.run(
-        ["findmnt", "-rn", "-t", "btrfs", "-o", "UUID,TARGET"],
-        capture_output=True, text=True, check=False,
-    ).stdout.splitlines():
-        uuid, _, target = line.partition(" ")
-        mounts.setdefault(uuid, target)
+def run(*args):
+    return subprocess.run(args, capture_output=True, text=True, check=False)
 
+
+def btrfs_mounts():
+    """Return one mount point per Btrfs filesystem, keyed by UUID."""
+    # Subvolume mounts of the same filesystem share devices and counters.
+    mounts = {}
+    for line in run("findmnt", "-rn", "-t", "btrfs", "-o", "UUID,TARGET").stdout.splitlines():
+        uuid, _, target = line.partition(" ")
+        mounts.setdefault(uuid, target.replace("\\x20", " "))
+    return mounts
+
+
+def btrfs_errors(mounts):
+    """Return the summed Btrfs device error counters per disk name."""
     errors = {}
     for mount in mounts.values():
-        stats = subprocess.run(
-            ["btrfs", "device", "stats", mount],
-            capture_output=True, text=True, check=False,
-        ).stdout
-        for line in stats.splitlines():
+        for line in run("btrfs", "device", "stats", mount).stdout.splitlines():
             match = re.match(r"\[/dev/(sd[a-z]+|nvme\d+)\S*\]\.\w+\s+(\d+)", line)
             if match:
                 errors[match.group(1)] = errors.get(match.group(1), 0) + int(match.group(2))
     return errors
 
 
+def disk_name(path):
+    """Return the whole-disk name of a device or partition path."""
+    match = re.match(r"/dev/(sd[a-z]+|nvme\d+)", path)
+    return match.group(1) if match else path.removeprefix("/dev/")
+
+
+# Copies per profile and minimum number of devices.
+MIRRORS = {"single": (1, 1), "dup": (1, 1), "raid0": (1, 1), "raid1": (2, 2),
+           "raid1c3": (3, 3), "raid1c4": (4, 4), "raid10": (2, 2), "raid5": (1, 2), "raid6": (1, 3)}
+GIB = 1024**3
+
+
+def mirror_capacity(sizes, copies):
+    """Return how much data with this many copies fits on the devices."""
+    sizes = sorted(sizes, reverse=True)
+    if len(sizes) < copies:
+        return 0
+    return min(sum(sizes[j:]) / (copies - j) for j in range(copies))
+
+
+def raw_ratio(profile, devices):
+    """Return raw bytes needed per byte of data in a profile."""
+    copies, _ = MIRRORS.get(profile, (1, 1))
+    if profile == "dup":
+        return 2
+    if profile == "raid5":
+        return devices / max(devices - 1, 1)
+    if profile == "raid6":
+        return devices / max(devices - 2, 1)
+    return copies
+
+
+def fits(profiles, sizes):
+    """Return the bytes missing to store all profiles on these devices (0 = fits)."""
+    total = sum(sizes)
+    # Reserve for metadata growth and allocation slack.
+    needed = 2 * GIB + 0.05 * total
+    missing = 0
+    for copies in (2, 3, 4):
+        mirrored = sum(used for profile, used in profiles.items()
+                       if MIRRORS.get(profile, (1, 1))[0] >= copies)
+        if mirrored:
+            missing = max(missing, mirrored * copies - mirror_capacity(sizes, copies) * copies)
+    for profile, used in profiles.items():
+        if len(sizes) < MIRRORS.get(profile, (1, 1))[1]:
+            return max(total, 1)
+        needed += used * raw_ratio(profile, len(sizes))
+    return int(max(missing, needed - total, 0))
+
+
+def btrfs_pools(mounts, serials):
+    """Describe every Btrfs filesystem and whether each disk could be removed."""
+    pools = []
+    for uuid, mount in mounts.items():
+        show = run("btrfs", "filesystem", "show", "--raw", mount).stdout
+        label = re.search(r"Label: '([^']*)'", show)
+        devices = [
+            {"devid": int(devid), "size": int(size), "used": int(used),
+             "name": disk_name(path), "serial": serials.get(disk_name(path), "")}
+            for devid, size, used, path in re.findall(
+                r"devid\s+(\d+)\s+size\s+(\d+)\s+used\s+(\d+)\s+path\s+(\S+)", show)
+        ]
+        profiles = {}
+        for kind, profile, used in re.findall(
+            r"^(Data|Metadata|System), ([\w]+): total=\d+, used=(\d+)",
+            run("btrfs", "filesystem", "df", "--raw", mount).stdout, re.M,
+        ):
+            profile = profile.lower()
+            profiles[profile] = profiles.get(profile, 0) + int(used)
+
+        usage = run("btrfs", "filesystem", "usage", "--raw", mount).stdout
+        free = re.search(r"Free \(estimated\):\s+(\d+)", usage)
+        size = sum(device["size"] for device in devices)
+        balance = run("btrfs", "balance", "status", mount).stdout
+
+        for device in devices:
+            others = [d["size"] for d in devices if d is not device]
+            device["missing_after_removal"] = fits(profiles, others)
+
+        pools.append({
+            "uuid": uuid,
+            "mount": mount,
+            "label": label.group(1) if label and label.group(1) != "none" else "",
+            "size": size,
+            "used": sum(profiles.values()),
+            "free": int(free.group(1)) if free else None,
+            "profiles": sorted(profiles),
+            "balance_running": "is running" in balance or "is paused" in balance,
+            "devices": devices,
+            "operations": removal_operations(),
+        })
+    return pools
+
+
+REMOVE_UNIT = "proxmox-host-monitor-remove-"
+
+
+def removal_operations():
+    """Return the state of disk removals started from Home Assistant."""
+    listing = run("systemctl", "list-units", "--all", "--plain", "--no-legend",
+                  f"{REMOVE_UNIT}*.service").stdout
+    operations = []
+    for unit in re.findall(rf"({REMOVE_UNIT}\S+)\.service", listing):
+        props = dict(
+            line.split("=", 1)
+            for line in run("systemctl", "show", "-p", "ActiveState,SubState,Result",
+                            f"{unit}.service").stdout.splitlines() if "=" in line
+        )
+        active, sub, result = props.get("ActiveState"), props.get("SubState"), props.get("Result")
+        if result not in ("success", None, ""):
+            state = "failed"
+        elif active == "active" and sub == "exited":
+            state = "done"
+        elif active in ("active", "activating", "deactivating"):
+            state = "running"
+        else:
+            state = "done"
+        operations.append({
+            "action": "btrfs_remove",
+            "serial": unit.removeprefix(REMOVE_UNIT),
+            "state": state,
+        })
+    return operations
+
+
+def execute(command, pools):
+    """Start a disk removal requested from Home Assistant after checking it again."""
+    if command.get("action") != "btrfs_remove":
+        return f"unknown action {command.get('action')}"
+    serial = str(command.get("serial", ""))
+    if not re.fullmatch(r"[\w.-]+", serial):
+        return "invalid serial"
+    pool = next((p for p in pools if p["uuid"] == command.get("pool")), None)
+    if pool is None:
+        return "pool not found"
+    device = next((d for d in pool["devices"] if d["serial"] == serial), None)
+    if device is None:
+        return f"disk {serial} is not part of the pool"
+    if pool["balance_running"]:
+        return "a balance is running, try again later"
+    if any(op["state"] == "running" for op in pool["operations"]):
+        return "another removal is running"
+    if device["missing_after_removal"]:
+        return f"not enough space, {device['missing_after_removal']} bytes missing"
+
+    unit = f"{REMOVE_UNIT}{serial}"
+    run("systemctl", "reset-failed", f"{unit}.service")
+    result = run(
+        "systemd-run", f"--unit={unit}", "--property=RemainAfterExit=yes",
+        f"--description=Proxmox Host Monitor: remove {device['name']} ({serial}) from {pool['mount']}",
+        "btrfs", "device", "remove", str(device["devid"]), pool["mount"],
+    )
+    return "started" if result.returncode == 0 else result.stderr.strip()
+
+
+def post(payload):
+    with open(WEBHOOK_URL_FILE, encoding="utf-8") as file:
+        url = file.read().strip()
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    return json.loads(urllib.request.urlopen(request, timeout=10).read().decode() or "{}")
+
+
 def main():
     scan, _ = smartctl("--scan-open")
     disks = [d for d in (check_disk(dev) for dev in scan.get("devices", [])) if d]
 
-    errors = btrfs_errors()
+    mounts = btrfs_mounts()
+    errors = btrfs_errors(mounts)
     for disk in disks:
         if disk["name"] in errors:
             disk["btrfs_errors"] = errors[disk["name"]]
@@ -143,20 +312,24 @@ def main():
                 )
                 disk["status"] = "critical"
 
-    payload = {"disks": disks}
+    pools = btrfs_pools(mounts, {disk["name"]: disk["serial"] for disk in disks})
+    payload = {"disks": disks, "pools": pools}
     if "--dry-run" in sys.argv:
         print(json.dumps(payload, indent=1))
         return
 
-    with open(WEBHOOK_URL_FILE, encoding="utf-8") as file:
-        url = file.read().strip()
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    print(urllib.request.urlopen(request, timeout=10).read().decode())
+    response = post(payload)
+    print(json.dumps(response))
+
+    results = [
+        {**command, "result": execute(command, pools)}
+        for command in response.get("commands", [])
+    ]
+    if results:
+        print(json.dumps(results))
+        # Report the started removal right away.
+        pools = btrfs_pools(mounts, {disk["name"]: disk["serial"] for disk in disks})
+        post({"disks": disks, "pools": pools, "command_results": results})
 
 
 if __name__ == "__main__":

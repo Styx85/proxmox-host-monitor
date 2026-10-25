@@ -126,6 +126,12 @@
     "binary_sensor": {
       "disk_problem": {
         "name": "Disk problem"
+      },
+      "removable": {
+        "name": "Removable"
+      },
+      "pool_operation": {
+        "name": "Operation running"
       }
     },
     "sensor": {
@@ -174,6 +180,12 @@
       },
       "power_on_hours": {
         "name": "Power-on time"
+      },
+      "pool_free": {
+        "name": "Free space"
+      },
+      "pool_used": {
+        "name": "Used"
       }
     }
   },
@@ -194,6 +206,42 @@
           "entry_not_found": "Proxmox Host Monitor is no longer configured."
         }
       }
+    },
+    "disk_failing": {
+      "title": "Disk {disk} is failing",
+      "description": "Disk **{disk}** ({model}, serial {serial}) reports critical problems: {problems}.\n\nThe disk is not part of a Btrfs filesystem monitored by Proxmox Host Monitor. Back up its data and replace it."
+    },
+    "disk_failing_removable": {
+      "title": "Disk {disk} is failing and can be removed",
+      "description": "Disk **{disk}** ({model}, serial {serial}) reports critical problems: {problems}.\n\nThe data of `{pool}` fits on the remaining disks. Use **Submit** to remove the disk from the filesystem; its data is moved to the other disks first.",
+      "fix_flow": {
+        "step": {
+          "confirm_removal": {
+            "title": "Remove {disk} from {pool}?",
+            "description": "The Proxmox host runs `btrfs device remove` for **{disk}** ({model}, serial {serial}). All data on it is moved to the other disks of `{pool}` first, which can take hours and slows down the filesystem meanwhile. The host checks again before it starts and refuses if it is no longer safe.\n\nThe host picks up the request within 5 minutes. Afterwards the disk can be disconnected."
+          }
+        },
+        "abort": {
+          "entry_not_found": "Proxmox Host Monitor is no longer configured.",
+          "pool_not_found": "The filesystem is no longer reported by the host."
+        }
+      }
+    },
+    "disk_failing_wait": {
+      "title": "Disk {disk} is failing",
+      "description": "Disk **{disk}** ({model}, serial {serial}) reports critical problems: {problems}.\n\nThe data of `{pool}` fits on the remaining disks, but a balance is running. The disk can be removed from Home Assistant once the balance has finished."
+    },
+    "disk_failing_no_space": {
+      "title": "Disk {disk} is failing: buy a new disk",
+      "description": "Disk **{disk}** ({model}, serial {serial}) reports critical problems: {problems}.\n\nThe remaining disks of `{pool}` are too small to take over its data: about **{missing} GB** are missing. Add a new disk of at least **{recommended} GB** to the filesystem as soon as possible, then remove {disk}."
+    },
+    "pool_space_low": {
+      "title": "Filesystem {pool} is running out of space",
+      "description": "Only **{free} GB** ({percentage} %) of `{pool}` are free. Free up space or add a disk."
+    },
+    "removal_failed": {
+      "title": "Removing disk {disk} failed",
+      "description": "The removal of disk **{disk}** (serial {serial}) did not succeed: {reason}.\n\nCheck `journalctl -u proxmox-host-monitor-remove-{serial}` on the Proxmox host."
     }
   },
   "exceptions": {

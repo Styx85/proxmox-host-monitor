@@ -13,7 +13,7 @@ else
     REQUIRED=false
 fi
 
-curl \
+RESPONSE=$(curl \
     --fail \
     --silent \
     --show-error \
@@ -21,4 +21,12 @@ curl \
     -X POST \
     -H "Content-Type: application/json" \
     -d "{\"required\":${REQUIRED}}" \
-    "${HA_WEBHOOK_URL}"
+    "${HA_WEBHOOK_URL}")
+echo "$RESPONSE"
+
+# Home Assistant queued a command (for example a disk removal); the disk
+# health report picks it up.
+case "$RESPONSE" in
+    *'"pending_commands": true'*)
+        systemctl start --no-block proxmox-host-monitor-disks.service ;;
+esac

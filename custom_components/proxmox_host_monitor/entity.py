@@ -10,7 +10,13 @@ from homeassistant.helpers.entity import Entity, EntityDescription
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import ProxmoxHostConfigEntry
-from .const import DOMAIN, SIGNAL_DISK_REPORT, SIGNAL_NEW_DISKS
+from .const import (
+    DOMAIN,
+    POOL_PREFIX,
+    SIGNAL_DISK_REPORT,
+    SIGNAL_NEW_DISKS,
+    SIGNAL_NEW_POOLS,
+)
 
 
 def _via_node(entry: ProxmoxHostConfigEntry) -> dict[str, Any]:
@@ -24,17 +30,6 @@ def _via_node(entry: ProxmoxHostConfigEntry) -> dict[str, Any]:
     if "via_device_id" in DeviceInfo.__annotations__:
         return {"via_device_id": node.id}
     return {"via_device": next(iter(node.identifiers))}
-
-
-def format_problems(disk: dict[str, Any]) -> list[str]:
-    """Return the problems of a disk as short, language-neutral strings."""
-    return [
-        problem["code"]
-        if problem.get("value") is None
-        else f"{problem['code']}: {problem['value']}"
-        for problem in disk.get("problems", [])
-        if isinstance(problem, dict) and "code" in problem
-    ]
 
 
 class ProxmoxHostEntity(Entity):
@@ -126,6 +121,61 @@ class ProxmoxDiskEntity(ProxmoxHostEntity):
     def available(self) -> bool:
         """Return whether the disk was part of a recent report."""
         return self._entry.runtime_data.disk_available(self._serial)
+
+
+class ProxmoxPoolEntity(ProxmoxHostEntity):
+    """Entity of a Btrfs filesystem on the host."""
+
+    def __init__(
+        self,
+        entry: ProxmoxHostConfigEntry,
+        uuid: str,
+        description: EntityDescription,
+    ) -> None:
+        """Initialize the entity."""
+        super().__init__(entry, description)
+        self._uuid = uuid
+        self._attr_unique_id = f"{POOL_PREFIX}{uuid}_{description.key}"
+        pool = self.pool
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"{POOL_PREFIX}{uuid}")},
+            name=f"Btrfs {pool.get('label') or pool['mount']}",
+            model="Btrfs",
+            **_via_node(entry),
+        )
+
+    @property
+    def pool(self) -> dict[str, Any]:
+        """Return the latest data of this filesystem."""
+        return self._entry.runtime_data.pools[self._uuid]
+
+    @property
+    def available(self) -> bool:
+        """Return whether the filesystem was part of a recent report."""
+        runtime_data = self._entry.runtime_data
+        return runtime_data.disks_current and self._uuid in runtime_data.pools
+
+
+@callback
+def async_setup_pool_platform(
+    hass: HomeAssistant,
+    entry: ProxmoxHostConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+    pool_entities: Callable[[str], list[Entity]],
+) -> None:
+    """Add entities for known Btrfs filesystems and new ones as they appear."""
+
+    @callback
+    def _add_pools(uuids: list[str]) -> None:
+        if entities := [entity for uuid in uuids for entity in pool_entities(uuid)]:
+            async_add_entities(entities)
+
+    _add_pools(list(entry.runtime_data.pools))
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass, f"{SIGNAL_NEW_POOLS}_{entry.entry_id}", _add_pools
+        )
+    )
 
 
 @callback
