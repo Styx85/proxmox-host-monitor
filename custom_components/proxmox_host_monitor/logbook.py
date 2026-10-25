@@ -96,6 +96,13 @@ def describe_problem(texts: dict[str, str], problem: str) -> str:
     return f"{label}:{value}" if value else label
 
 
+def _linked(data: dict[str, Any], described: dict[str, str]) -> dict[str, str]:
+    """Show the entry in the activity of the entity it explains."""
+    if entity_id := data.get("entity_id"):
+        described["entity_id"] = entity_id
+    return described
+
+
 @callback
 def async_describe_events(
     hass: HomeAssistant,
@@ -109,10 +116,13 @@ def async_describe_events(
         data: dict[str, Any] = event.data
         problems = [describe_problem(texts, p) for p in data.get("problems", [])]
         status = texts["status"].format(status=texts.get(data["status"], data["status"]))
-        return {
-            "name": f"{data.get('model', '')} {data['disk']}".strip(),
-            "message": f"{status}: {', '.join(problems) or texts['no_problems']}",
-        }
+        return _linked(
+            data,
+            {
+                "name": f"{data.get('model', '')} {data['disk']}".strip(),
+                "message": f"{status}: {', '.join(problems) or texts['no_problems']}",
+            },
+        )
 
     @callback
     def describe_alert(event: Event) -> dict[str, str]:
@@ -129,10 +139,13 @@ def async_describe_events(
             for kind in ("critical", "warning")
             if data.get(kind)
         ]
-        return {
-            "name": data["scope"],
-            "message": f"{status}: {' · '.join(details) or texts['all_ok']}",
-        }
+        return _linked(
+            data,
+            {
+                "name": data["scope"],
+                "message": f"{status}: {' · '.join(details) or texts['all_ok']}",
+            },
+        )
 
     @callback
     def describe_operation(event: Event) -> dict[str, str]:
@@ -142,7 +155,7 @@ def async_describe_events(
             message = texts["balance_progress"].format(progress=data["progress"])
         else:
             message = texts[operation].format(disks=", ".join(data.get("disks", [])))
-        return {"name": data["scope"], "message": message}
+        return _linked(data, {"name": data["scope"], "message": message})
 
     async_describe_event(DOMAIN, EVENT_DISK_STATUS, describe_status)
     async_describe_event(DOMAIN, EVENT_HEALTH_STATUS, describe_health)

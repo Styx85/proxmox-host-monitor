@@ -319,4 +319,5 @@ async def test_status_change_reason(hass, entry, hass_client_no_auth):
     assert described[EVENT_DISK_STATUS](events[-1]) == {
         "name": "ST4000VX016 sda",
         "message": "Zustand Warnung: Selbsttest überfällig (Stunden)",
+        "entity_id": health.entity_id,
     }
