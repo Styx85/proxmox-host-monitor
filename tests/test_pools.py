@@ -338,3 +338,14 @@ async def test_reasons_after_restart(hass, entry, report):
     problem = _state(hass, "binary_sensor", f"pool_{UUID}_problem")
     pool_event = next(event for event in health if event.data["scope"] == "Btrfs storage")
     assert problem.context.id == pool_event.context.id
+
+    # The reason shows up in the activity of the pool health sensor and device.
+    health_sensor = er.async_get(hass).async_get_entity_id("sensor", DOMAIN, f"pool_{UUID}_health")
+    assert pool_event.data["entity_id"] == health_sensor
+    assert pool_event.data["device_id"] == er.async_get(hass).async_get(health_sensor).device_id
+
+    from custom_components.proxmox_host_monitor.logbook import async_describe_events
+
+    described = {}
+    async_describe_events(hass, lambda domain, event_type, fn: described.update({event_type: fn}))
+    assert described[EVENT_HEALTH_STATUS](pool_event)["entity_id"] == health_sensor

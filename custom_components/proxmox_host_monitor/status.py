@@ -10,12 +10,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import Context, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     DISK_STATUS_CRITICAL,
     DISK_STATUS_OK,
     DISK_STATUS_WARNING,
     DISK_STATUSES,
+    DOMAIN,
     EVENT_DISK_STATUS,
     EVENT_HEALTH_STATUS,
     EVENT_OPERATION,
@@ -107,6 +109,7 @@ def async_announce_changes(
                 hass,
                 entry,
                 serial,
+                f"disk_{serial}_health",
                 EVENT_DISK_STATUS,
                 {
                     "disk": disk["name"],
@@ -126,7 +129,10 @@ def async_announce_changes(
             changed = runtime_data.summaries.get(key) != summary
         runtime_data.summaries[key] = summary
         if changed:
-            _fire(hass, entry, key, EVENT_HEALTH_STATUS, {"scope": name, **summary})
+            unique_id = "disk_health" if key == HOST_SCOPE else f"{key}_health"
+            _fire(
+                hass, entry, key, unique_id, EVENT_HEALTH_STATUS, {"scope": name, **summary}
+            )
 
     for uuid, pool in runtime_data.pools.items():
         key = f"{POOL_PREFIX}{uuid}{OPERATION_SUFFIX}"
@@ -143,6 +149,7 @@ def async_announce_changes(
                 hass,
                 entry,
                 key,
+                f"{POOL_PREFIX}{uuid}_operation",
                 EVENT_OPERATION,
                 {"scope": f"Btrfs {pool.get('label') or pool.get('mount')}", **operation},
             )
@@ -153,9 +160,17 @@ def _fire(
     hass: HomeAssistant,
     entry: ProxmoxHostConfigEntry,
     key: str,
+    sensor_unique_id: str,
     event_type: str,
     data: dict[str, Any],
 ) -> None:
+    # The entity and device let the logbook list the reason in their activity,
+    # even when the state itself does not change (for example after a restart).
+    ent_reg = er.async_get(hass)
+    if entity_id := ent_reg.async_get_entity_id("sensor", DOMAIN, sensor_unique_id):
+        data["entity_id"] = entity_id
+        if (entity := ent_reg.async_get(entity_id)) and entity.device_id:
+            data["device_id"] = entity.device_id
     context = Context()
     entry.runtime_data.contexts[key] = context
     hass.bus.async_fire(event_type, data, context=context)
