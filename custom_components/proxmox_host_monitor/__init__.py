@@ -262,6 +262,28 @@ def _schedule_disk_timeout(
     runtime_data.cancel_disk_timeout = async_call_later(hass, remaining, _expired)
 
 
+@callback
+def _async_update_disk_devices(
+    hass: HomeAssistant,
+    entry: ProxmoxHostConfigEntry,
+    disks: list[dict[str, Any]],
+) -> None:
+    """Keep firmware and model family of known disk devices up to date."""
+    dev_reg = dr.async_get(hass)
+    for disk in disks:
+        identifier = (DOMAIN, disk["serial"])
+        if hasattr(dev_reg, "async_get_device_by_identifier"):
+            device = dev_reg.async_get_device_by_identifier(identifier, entry.entry_id)
+        else:
+            device = dev_reg.async_get_device(identifiers={identifier})
+        if device is None:
+            continue
+        firmware = disk.get("firmware") or None
+        family = disk.get("model_family") or None
+        if (device.sw_version, device.model_id) != (firmware, family):
+            dev_reg.async_update_device(device.id, sw_version=firmware, model_id=family)
+
+
 def _valid_pools(pools: Any) -> bool:
     """Return whether a pool report has the expected shape."""
     return isinstance(pools, list) and all(
@@ -355,6 +377,7 @@ async def async_handle_webhook(
         ]
         for disk in disks:
             runtime_data.disks[disk["serial"]] = disk
+        _async_update_disk_devices(hass, entry, disks)
         runtime_data.present = {disk["serial"] for disk in disks}
         runtime_data.disks_reported_at = dt_util.utcnow()
         _schedule_disk_timeout(hass, entry)

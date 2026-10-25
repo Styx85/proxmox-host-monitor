@@ -267,3 +267,21 @@ async def test_disk_info(hass, entry, hass_client_no_auth):
     device = _disk_device(hass, entry, "WW6099YV")
     assert device.sw_version == "CV10"
     assert device.model_id == "Seagate SkyHawk"
+
+
+async def test_new_values_of_known_disks(hass, entry, hass_client_no_auth):
+    """Values reported later by a newer host script get entities and device info."""
+    await _report(hass_client_no_auth, hass, [HEALTHY])
+    assert er.async_get(hass).async_get_entity_id(
+        "sensor", DOMAIN, "disk_WW6099YV_capacity"
+    ) is None
+
+    newer = deepcopy(HEALTHY) | {"capacity": 4000787030016, "firmware": "CV10"}
+    await _report(hass_client_no_auth, hass, [newer])
+    assert hass.states.get(_entity_id(hass, "disk_WW6099YV_capacity")) is not None
+    assert _disk_device(hass, entry, "WW6099YV").sw_version == "CV10"
+
+    # Nothing is added twice.
+    count = len(hass.states.async_entity_ids("sensor"))
+    await _report(hass_client_no_auth, hass, [newer])
+    assert len(hass.states.async_entity_ids("sensor")) == count

@@ -199,24 +199,37 @@ def async_setup_disk_platform(
     summary_entities: Callable[[], list[Entity]],
     disk_entities: Callable[[str], list[Entity]],
 ) -> None:
-    """Add entities for known disks now and for new disks as they appear."""
-    summary_added = False
+    """Add entities for known disks and add missing ones after every report.
+
+    Disks restored after a restart are created from the last stored report;
+    values a newer host script reports later still get their entities.
+    """
+    added: set[str | None] = set()
 
     @callback
     def _add_disks(serials: list[str]) -> None:
-        nonlocal summary_added
-        entities: list[Entity] = []
-        if serials and not summary_added:
-            summary_added = True
-            entities.extend(summary_entities())
+        candidates: list[Entity] = []
+        if serials:
+            candidates.extend(summary_entities())
         for serial in serials:
-            entities.extend(disk_entities(serial))
+            candidates.extend(disk_entities(serial))
+        entities = [entity for entity in candidates if entity.unique_id not in added]
+        added.update(entity.unique_id for entity in entities)
         if entities:
             async_add_entities(entities)
+
+    @callback
+    def _add_reported() -> None:
+        _add_disks(sorted(entry.runtime_data.present))
 
     _add_disks(list(entry.runtime_data.disks))
     entry.async_on_unload(
         async_dispatcher_connect(
             hass, f"{SIGNAL_NEW_DISKS}_{entry.entry_id}", _add_disks
+        )
+    )
+    entry.async_on_unload(
+        async_dispatcher_connect(
+            hass, f"{SIGNAL_DISK_REPORT}_{entry.entry_id}", _add_reported
         )
     )
