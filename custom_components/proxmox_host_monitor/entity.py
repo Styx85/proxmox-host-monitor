@@ -108,6 +108,60 @@ class ProxmoxHostSummaryEntity(ProxmoxHostEntity):
         ]
 
 
+class ProxmoxHostInfoEntity(ProxmoxHostSummaryEntity):
+    """Entity for information about the host itself, attached to the node."""
+
+    def __init__(
+        self,
+        entry: ProxmoxHostConfigEntry,
+        description: EntityDescription,
+        unique_id: str | None = None,
+        placeholders: dict[str, str] | None = None,
+    ) -> None:
+        """Initialize the entity."""
+        super().__init__(entry, description)
+        self._attr_unique_id = unique_id or f"host_{description.key}"
+        if placeholders:
+            self._attr_translation_placeholders = placeholders
+
+    @property
+    def host(self) -> dict[str, Any]:
+        """Return the host part of the latest report."""
+        return self._entry.runtime_data.host
+
+    @property
+    def available(self) -> bool:
+        """Return whether a recent report with host information exists."""
+        return super().available and bool(self.host)
+
+
+@callback
+def async_setup_host_platform(
+    hass: HomeAssistant,
+    entry: ProxmoxHostConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+    host_entities: Callable[[dict[str, Any]], list[Entity]],
+) -> None:
+    """Add host entities now and those for new sensors after every report."""
+    added: set[str | None] = set()
+
+    @callback
+    def _add() -> None:
+        if not (host := entry.runtime_data.host):
+            return
+        entities = [
+            entity for entity in host_entities(host) if entity.unique_id not in added
+        ]
+        added.update(entity.unique_id for entity in entities)
+        if entities:
+            async_add_entities(entities)
+
+    _add()
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, f"{SIGNAL_DISK_REPORT}_{entry.entry_id}", _add)
+    )
+
+
 class ProxmoxDiskEntity(ProxmoxHostEntity):
     """Entity of a single disk, grouped in a device per disk."""
 

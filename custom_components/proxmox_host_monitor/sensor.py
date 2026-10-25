@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -12,6 +13,8 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.const import (
     PERCENTAGE,
+    REVOLUTIONS_PER_MINUTE,
+    UnitOfDataRate,
     EntityCategory,
     UnitOfInformation,
     UnitOfTemperature,
@@ -19,15 +22,18 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util, slugify
 
 from . import ProxmoxHostConfigEntry
 from .alerts import find_pool_device
 from .const import DISK_STATUSES, OPERATION_SUFFIX, OPERATIONS, POOL_PREFIX
 from .entity import (
     ProxmoxDiskEntity,
+    ProxmoxHostInfoEntity,
     ProxmoxHostSummaryEntity,
     ProxmoxPoolEntity,
     async_setup_disk_platform,
+    async_setup_host_platform,
     async_setup_pool_platform,
 )
 from .helpers import format_problems, free_share, pool_operation
@@ -87,6 +93,7 @@ DISK_SENSORS = (
     _counter("reallocated_sectors"),
     _counter("reported_uncorrectable"),
     _counter("btrfs_errors"),
+    _counter("io_errors_24h"),
     _counter("media_errors"),
     ProxmoxDiskSensorDescription(
         key="percentage_used",
@@ -174,11 +181,131 @@ POOL_PROGRESS = SensorEntityDescription(
     state_class=SensorStateClass.MEASUREMENT,
 )
 
+POOL_SCRUB = SensorEntityDescription(
+    key="last_scrub",
+    translation_key="pool_last_scrub",
+    device_class=SensorDeviceClass.TIMESTAMP,
+)
+
 POOL_DEVICES = SensorEntityDescription(
     key="devices",
     translation_key="pool_devices",
     state_class=SensorStateClass.MEASUREMENT,
 )
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProxmoxHostSensorDescription(SensorEntityDescription):
+    """Describes a value of the host part of a report."""
+
+    value_fn: Callable[[dict[str, Any]], Any]
+    attributes_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+
+
+def _timestamp(value: Any) -> datetime | None:
+    return dt_util.utc_from_timestamp(value) if isinstance(value, (int, float)) else None
+
+
+HOST_SENSORS = (
+    ProxmoxHostSensorDescription(
+        key="failed_units",
+        translation_key="failed_units",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda host: len(host.get("failed_units", [])),
+        attributes_fn=lambda host: {"units": host.get("failed_units", [])},
+    ),
+    ProxmoxHostSensorDescription(
+        key="last_backup",
+        translation_key="last_backup",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda host: _timestamp(host.get("backup", {}).get("last")),
+        attributes_fn=lambda host: {
+            "jobs": host.get("backup", {}).get("jobs"),
+            "status": host.get("backup", {}).get("last_status"),
+        },
+    ),
+    ProxmoxHostSensorDescription(
+        key="certificate_expires",
+        translation_key="certificate_expires",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda host: _timestamp(host.get("certificate_expires")),
+    ),
+    ProxmoxHostSensorDescription(
+        key="unattended_upgrades",
+        translation_key="unattended_upgrades",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda host: _timestamp((host.get("unattended_upgrades") or {}).get("last")),
+        attributes_fn=lambda host: {
+            "success": (host.get("unattended_upgrades") or {}).get("success")
+        },
+    ),
+)
+
+HOST_TEMPERATURE = SensorEntityDescription(
+    key="temperature",
+    translation_key="host_temperature",
+    device_class=SensorDeviceClass.TEMPERATURE,
+    native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+    state_class=SensorStateClass.MEASUREMENT,
+)
+
+HOST_FAN = SensorEntityDescription(
+    key="fan",
+    translation_key="host_fan",
+    native_unit_of_measurement=REVOLUTIONS_PER_MINUTE,
+    state_class=SensorStateClass.MEASUREMENT,
+)
+
+THIN_POOL = SensorEntityDescription(
+    key="thin_pool",
+    translation_key="thin_pool",
+    native_unit_of_measurement=PERCENTAGE,
+    suggested_display_precision=1,
+    state_class=SensorStateClass.MEASUREMENT,
+)
+
+NIC_SPEED = SensorEntityDescription(
+    key="nic",
+    translation_key="nic_speed",
+    device_class=SensorDeviceClass.DATA_RATE,
+    native_unit_of_measurement=UnitOfDataRate.MEGABITS_PER_SECOND,
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
+
+def _host_entities(
+    entry: ProxmoxHostConfigEntry,
+) -> Callable[[dict[str, Any]], list[SensorEntity]]:
+    """Return a factory for the host sensors of the current report."""
+
+    def _entities(host: dict[str, Any]) -> list[SensorEntity]:
+        entities: list[SensorEntity] = [
+            ProxmoxHostValueSensor(entry, description) for description in HOST_SENSORS
+        ]
+        for kind, description, items, label in (
+            ("temperatures", HOST_TEMPERATURE, host.get("temperatures", []), "sensor"),
+            ("fans", HOST_FAN, host.get("fans", []), "sensor"),
+            ("thin_pools", THIN_POOL, host.get("thin_pools", []), "name"),
+            # Unused ports without a link would only add empty sensors.
+            ("nics", NIC_SPEED, [n for n in host.get("nics", []) if n.get("state") == "up"], "name"),
+        ):
+            for item in items:
+                name = item.get("name") or f"{item.get('chip')} {item.get('label')}"
+                entities.append(
+                    ProxmoxHostListSensor(
+                        entry,
+                        description,
+                        unique_id=f"host_{description.key}_{slugify(name)}",
+                        placeholders={label: name},
+                        kind=kind,
+                        name=name,
+                    )
+                )
+        return entities
+
+    return _entities
 
 
 async def async_setup_entry(
@@ -216,8 +343,10 @@ async def async_setup_entry(
             ProxmoxPoolDevicesSensor(entry, uuid, POOL_DEVICES),
             ProxmoxPoolOperationSensor(entry, uuid, POOL_OPERATION),
             ProxmoxPoolOperationSensor(entry, uuid, POOL_PROGRESS),
+            ProxmoxPoolScrubSensor(entry, uuid, POOL_SCRUB),
         ],
     )
+    async_setup_host_platform(hass, entry, async_add_entities, _host_entities(entry))
 
 
 class ProxmoxDisksHealthSensor(ProxmoxHostSummaryEntity, SensorEntity):
@@ -374,3 +503,97 @@ class ProxmoxPoolDevicesSensor(ProxmoxPoolEntity, SensorEntity):
     def native_value(self) -> int:
         """Return the number of devices."""
         return len(self.pool.get("devices", []))
+
+
+class ProxmoxPoolScrubSensor(ProxmoxPoolEntity, SensorEntity):
+    """Time of the last scrub of a Btrfs filesystem, with its result."""
+
+    @property
+    def native_value(self) -> datetime | None:
+        """Return when the last scrub started."""
+        return _timestamp((self.pool.get("scrub") or {}).get("last"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the result of the last scrub."""
+        scrub = self.pool.get("scrub") or {}
+        return {
+            key: scrub.get(key)
+            for key in ("status", "duration", "errors", "corrected", "uncorrectable")
+        }
+
+
+class ProxmoxHostValueSensor(ProxmoxHostInfoEntity, SensorEntity):
+    """A value of the host part of a report."""
+
+    entity_description: ProxmoxHostSensorDescription
+
+    @property
+    def native_value(self) -> Any:
+        """Return the reported value."""
+        return self.entity_description.value_fn(self.host)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return details of the value."""
+        if self.entity_description.attributes_fn is None:
+            return None
+        return self.entity_description.attributes_fn(self.host)
+
+
+class ProxmoxHostListSensor(ProxmoxHostInfoEntity, SensorEntity):
+    """A temperature, fan, thin pool or network interface of the host."""
+
+    def __init__(
+        self,
+        entry: ProxmoxHostConfigEntry,
+        description: SensorEntityDescription,
+        *,
+        unique_id: str,
+        placeholders: dict[str, str],
+        kind: str,
+        name: str,
+    ) -> None:
+        """Initialize the entity."""
+        super().__init__(entry, description, unique_id, placeholders)
+        self._kind = kind
+        self._name = name
+
+    @property
+    def _item(self) -> dict[str, Any] | None:
+        for item in self.host.get(self._kind, []):
+            if (item.get("name") or f"{item.get('chip')} {item.get('label')}") == self._name:
+                return item
+        return None
+
+    @property
+    def available(self) -> bool:
+        """Return whether the sensor is part of the latest report."""
+        return super().available and self._item is not None
+
+    @property
+    def native_value(self) -> float | int | None:
+        """Return the temperature, speed, usage or link speed."""
+        item = self._item or {}
+        return {
+            "temperatures": item.get("value"),
+            "fans": item.get("rpm"),
+            "thin_pools": item.get("data_percent"),
+            "nics": item.get("speed"),
+        }[self._kind]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return limits, metadata usage or interface details."""
+        item = self._item or {}
+        if self._kind == "temperatures":
+            return {key: item[key] for key in ("max", "crit") if key in item} or None
+        if self._kind == "thin_pools":
+            return {"metadata_percent": item.get("metadata_percent")}
+        if self._kind == "nics":
+            return {
+                "state": item.get("state"),
+                "rx_errors": item.get("rx_errors"),
+                "tx_errors": item.get("tx_errors"),
+            }
+        return None

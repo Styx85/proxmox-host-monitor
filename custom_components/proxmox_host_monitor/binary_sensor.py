@@ -15,6 +15,7 @@ from .const import (
     DISK_STATUS_CRITICAL,
     DISK_STATUS_OK,
     DISK_STATUS_WARNING,
+    HOST_PROBLEMS,
     OPERATION_IDLE,
     OPERATION_SUFFIX,
     POOL_PREFIX,
@@ -22,12 +23,14 @@ from .const import (
 from .alerts import find_pool_device
 from .entity import (
     ProxmoxDiskEntity,
+    ProxmoxHostInfoEntity,
     ProxmoxHostSummaryEntity,
     ProxmoxPoolEntity,
     async_setup_disk_platform,
+    async_setup_host_platform,
     async_setup_pool_platform,
 )
-from .helpers import format_problems, pool_operation
+from .helpers import format_host_problems, format_problems, pool_operation
 
 SUMMARY_PROBLEM = BinarySensorEntityDescription(
     key="disk_problem",
@@ -44,6 +47,12 @@ DISK_PROBLEM = BinarySensorEntityDescription(
 DISK_REMOVABLE = BinarySensorEntityDescription(
     key="removable",
     translation_key="removable",
+)
+
+HOST_PROBLEM = BinarySensorEntityDescription(
+    key="problem",
+    translation_key="host_problem",
+    device_class=BinarySensorDeviceClass.PROBLEM,
 )
 
 POOL_PROBLEM = BinarySensorEntityDescription(
@@ -88,6 +97,12 @@ async def async_setup_entry(
         lambda: [ProxmoxDisksProblemSensor(entry, SUMMARY_PROBLEM)],
         lambda serial: [ProxmoxDiskProblemSensor(entry, serial, DISK_PROBLEM)]
         + _removable([serial]),
+    )
+    async_setup_host_platform(
+        hass,
+        entry,
+        async_add_entities,
+        lambda host: [ProxmoxHostProblemSensor(entry, HOST_PROBLEM)],
     )
     async_setup_pool_platform(
         hass,
@@ -215,4 +230,30 @@ class ProxmoxPoolProblemSensor(ProxmoxPoolEntity, BinarySensorEntity):
                 for disk in disks
                 for problem in format_problems(disk)
             ],
+        }
+
+
+class ProxmoxHostProblemSensor(ProxmoxHostInfoEntity, BinarySensorEntity):
+    """On while the host itself has a problem (services, backups, ...)."""
+
+    def __init__(
+        self,
+        entry: ProxmoxHostConfigEntry,
+        description: BinarySensorEntityDescription,
+    ) -> None:
+        """Initialize the entity."""
+        super().__init__(entry, description)
+        self._context_key = HOST_PROBLEMS
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether the host reports a problem."""
+        return bool(self.host.get("problems"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the problems and the worst severity."""
+        return {
+            "status": self.host.get("status"),
+            "problems": format_host_problems(self.host),
         }

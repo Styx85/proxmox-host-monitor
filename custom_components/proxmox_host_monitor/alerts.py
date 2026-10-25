@@ -7,17 +7,19 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.util import slugify
 
 from .const import (
     DISK_STATUS_CRITICAL,
     DOMAIN,
     EVENT_ALERT,
     ISSUE_DISK_FAILING,
+    ISSUE_HOST_PROBLEM,
     ISSUE_POOL_SPACE_LOW,
     ISSUE_REMOVAL_FAILED,
     POOL_FREE_WARNING,
 )
-from .helpers import format_problems, free_share
+from .helpers import format_problems, free_share, host_problem_key
 
 if TYPE_CHECKING:
     from . import ProxmoxHostConfigEntry, ProxmoxHostRuntimeData
@@ -183,7 +185,55 @@ def async_update_alerts(
                 percentage=round(share * 100),
             )
 
+    _async_update_host_issues(hass, entry, active)
     runtime_data.alerted = active
+
+
+@callback
+def _async_update_host_issues(
+    hass: HomeAssistant,
+    entry: ProxmoxHostConfigEntry,
+    active: set[str],
+) -> None:
+    """Raise a repair issue per host problem and alert once per problem."""
+    runtime_data = entry.runtime_data
+    current: set[str] = set()
+    for problem in runtime_data.host.get("problems", []):
+        if not isinstance(problem, dict) or "code" not in problem:
+            continue
+        code, item, value = problem["code"], problem.get("item") or "", problem.get("value")
+        issue_id = ISSUE_HOST_PROBLEM.format(code=code, item=slugify(item) or "host")
+        current.add(issue_id)
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.ERROR
+            if problem.get("severity") == DISK_STATUS_CRITICAL
+            else ir.IssueSeverity.WARNING,
+            translation_key=f"host_{code}",
+            translation_placeholders={
+                "item": item,
+                "value": "" if value is None else str(value),
+            },
+        )
+        alert_key = f"host:{host_problem_key(problem)}:{problem.get('severity')}"
+        active.add(alert_key)
+        if alert_key not in runtime_data.alerted:
+            _fire(
+                hass,
+                "host_problem",
+                code=code,
+                item=item,
+                value=value,
+                severity=problem.get("severity"),
+            )
+
+    for issue_id in runtime_data.host_issues - current:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+    runtime_data.host_issues = current
 
 
 @callback
