@@ -231,3 +231,92 @@ async def test_remove_absent_disk_device(hass, entry, hass_client_no_auth):
     await _report(hass_client_no_auth, hass, [HEALTHY])
     assert await async_remove_config_entry_device(hass, entry, failing)
     assert "WD-WMATV1460428" not in entry.runtime_data.disks
+
+
+async def test_disk_info(hass, entry, hass_client_no_auth):
+    """General disk information becomes sensors, attributes and device info."""
+    disk = deepcopy(HEALTHY) | {
+        "model_family": "Seagate SkyHawk",
+        "firmware": "CV10",
+        "capacity": 4000787030016,
+        "protocol": "ATA",
+        "interface": "SATA 3.1",
+        "rotation_rate": 5400,
+        "form_factor": "3.5 inches",
+        "smart_passed": True,
+        "power_cycles": 45,
+        "start_stop_count": 119,
+        "load_cycles": 1285,
+        "power_on_hours": 17532,
+        "self_test": {"type": "Short offline", "result": "Completed without error", "passed": True, "hours_ago": 5},
+    }
+    await _report(hass_client_no_auth, hass, [disk])
+
+    power_on = hass.states.get(_entity_id(hass, "disk_WW6099YV_power_on_hours"))
+    assert power_on.attributes["unit_of_measurement"] == "d"
+    assert round(float(power_on.state)) == 730
+    assert hass.states.get(_entity_id(hass, "disk_WW6099YV_power_cycles")).state == "45"
+    self_test = hass.states.get(_entity_id(hass, "disk_WW6099YV_self_test_age"))
+    assert self_test.state == "5"
+    assert self_test.attributes["result"] == "Completed without error"
+    assert float(hass.states.get(_entity_id(hass, "disk_WW6099YV_capacity")).state) == pytest.approx(4000.787, 0.001)
+
+    health = hass.states.get(_entity_id(hass, "disk_WW6099YV_health")).attributes
+    assert health["device"] == "/dev/sda"
+    assert health["rotation_rate"] == 5400
+    assert health["interface"] == "SATA 3.1"
+
+    device = _disk_device(hass, entry, "WW6099YV")
+    assert device.sw_version == "CV10"
+    assert device.model_id == "Seagate SkyHawk"
+
+
+async def test_new_values_of_known_disks(hass, entry, hass_client_no_auth):
+    """Values reported later by a newer host script get entities and device info."""
+    await _report(hass_client_no_auth, hass, [HEALTHY])
+    assert er.async_get(hass).async_get_entity_id(
+        "sensor", DOMAIN, "disk_WW6099YV_capacity"
+    ) is None
+
+    newer = deepcopy(HEALTHY) | {"capacity": 4000787030016, "firmware": "CV10"}
+    await _report(hass_client_no_auth, hass, [newer])
+    assert hass.states.get(_entity_id(hass, "disk_WW6099YV_capacity")) is not None
+    assert _disk_device(hass, entry, "WW6099YV").sw_version == "CV10"
+
+    # Nothing is added twice.
+    count = len(hass.states.async_entity_ids("sensor"))
+    await _report(hass_client_no_auth, hass, [newer])
+    assert len(hass.states.async_entity_ids("sensor")) == count
+
+
+async def test_status_change_reason(hass, entry, hass_client_no_auth):
+    """A health change fires an event whose context the new states carry."""
+    from pytest_homeassistant_custom_component.common import async_capture_events
+
+    from custom_components.proxmox_host_monitor.const import EVENT_DISK_STATUS
+    from custom_components.proxmox_host_monitor.logbook import async_describe_events
+
+    events = async_capture_events(hass, EVENT_DISK_STATUS)
+    await _report(hass_client_no_auth, hass, [HEALTHY])
+    assert [event.data["status"] for event in events] == ["ok"]
+
+    overdue = deepcopy(HEALTHY) | {
+        "status": "warning",
+        "problems": [{"code": "self_test_overdue", "severity": "warning", "value": None}],
+    }
+    await _report(hass_client_no_auth, hass, [overdue])
+    await _report(hass_client_no_auth, hass, [overdue])
+    assert [event.data["status"] for event in events] == ["ok", "warning"]
+
+    health = hass.states.get(_entity_id(hass, "disk_WW6099YV_health"))
+    assert health.state == "warning"
+    assert health.context.id == events[-1].context.id
+    assert health.attributes["problems"] == ["self_test_overdue"]
+
+    described = {}
+    hass.config.language = "de"
+    async_describe_events(hass, lambda domain, event_type, fn: described.update({event_type: fn}))
+    assert described[EVENT_DISK_STATUS](events[-1]) == {
+        "name": "ST4000VX016 sda",
+        "message": "Zustand Warnung: Selbsttest überfällig (Stunden)",
+    }

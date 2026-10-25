@@ -22,6 +22,7 @@ Proxmox Host Monitor replaces **Proxmox Reboot Update**. An existing installatio
 **Disk health**
 
 - One device per disk (by serial number) with a problem sensor, health and the relevant SMART values: temperature, pending, reallocated and uncorrectable sectors, CRC errors, command timeouts, power-on time, NVMe wear and media errors.
+- General disk information: capacity, power-on time in days (SMART counts running hours, not the age since manufacture), power cycles, start/stop and load cycles, time since the last self-test (with its result), and as attributes of the health sensor the device path, model family, firmware, interface, rotation rate or SSD, form factor and the Btrfs filesystem the disk belongs to.
 - Btrfs device error counters per disk.
 - Summary entities `Disk problem` and `Disk health` on the Proxmox node.
 - New disks appear automatically. Removed disks become unavailable and can be deleted from the device page.
@@ -32,11 +33,21 @@ The evaluation is deliberately strict:
 | Health | Triggered by |
 |---|---|
 | critical | SMART failed, failure predicted, pending or offline uncorrectable sectors, reported uncorrectable errors, Btrfs device errors, NVMe critical warning, media errors or spare below threshold, temperature ≥ 55 °C |
-| warning | reallocated sectors, CRC errors, command timeouts, errors in the SMART error log, failed self-test, attribute below threshold in the past, NVMe wear ≥ 80 %, temperature ≥ 50 °C |
+| warning | reallocated sectors, CRC errors, command timeouts, errors in the SMART error log, failed self-test, no self-test within the last 8 days of power-on time, attribute below threshold in the past, NVMe wear ≥ 80 %, temperature ≥ 50 °C |
+
+### Regular self-tests
+
+SMART self-tests find bad sectors before data is read from them. Let smartd schedule them, for example a short test every day at 02:00 and a long test on the third Saturday of every month at 03:00, by adding `-s` to the `DEVICESCAN` line in `/etc/smartd.conf`:
+
+```
+DEVICESCAN -d removable -n standby -s (S/../.././02|L/../(1[5-9]|2[01])/6/03) -m root -M exec /usr/share/smartmontools/smartd-runner
+```
+
+Then run `systemctl restart smartd`; `smartd -q showtests` lists the next tests. Without scheduled tests the disks report *self-test overdue* as a warning.
 
 **Btrfs storage and failing disks**
 
-- One device per Btrfs filesystem with free space, usage and whether a balance or a disk removal is running.
+- One device per Btrfs filesystem with free space, data, raw size, usage, number of disks, the worst health of its disks, a problem sensor listing its critical and warning disks, the running operation (balance with progress, or the disk being removed). The usage sensor carries the profiles per data, metadata and system and the allocation per disk.
 - Every report checks for each disk whether the data of its filesystem would still fit on the other disks (respecting the RAID profiles and a safety margin). The result is shown as *Removable* on the disk.
 - A critical disk raises a repair issue under **Settings → System → Repairs**:
   - **Removable**: confirm the repair to remove the disk from the filesystem. The host moves its data to the other disks with `btrfs device remove` and reports the progress. The host checks again before it starts and refuses while a balance runs or if the space no longer suffices.
@@ -44,6 +55,10 @@ The evaluation is deliberately strict:
   - **Balance running**: removal becomes possible once the balance has finished.
 - A filesystem with less than 10 % free space raises a warning.
 - Home Assistant never connects to the host for this. The removal request is handed to the host with the response to its next report (within 5 minutes).
+
+**Logbook**
+
+Every health change of a disk, a Btrfs filesystem or the host and every start and end of a balance or disk removal is written to the logbook with its reason, for example *Btrfs storage: health critical: critical: sde · warning: sdd* or *balance running (86 % done)*. The changed states are linked to that entry, so *What happened* in the activity details shows the reason. After a restart the current problems are written again.
 
 **Notifications**
 

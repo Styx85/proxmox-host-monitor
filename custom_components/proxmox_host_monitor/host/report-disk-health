@@ -17,6 +17,10 @@ WEBHOOK_URL_FILE = "/etc/proxmox-host-monitor/webhook-url"
 TEMP_WARNING = 50
 TEMP_CRITICAL = 55
 
+# The last self-test may be at most this many power-on hours old (smartd
+# runs a short test every day when scheduled with -s).
+SELF_TEST_MAX_AGE_HOURS = 8 * 24
+
 # ATA attribute id: (key, severity when the raw value is above zero)
 ATA_CHECKS = {
     5: ("reallocated_sectors", "warning"),
@@ -40,6 +44,52 @@ def smartctl(*args):
         return {}, result.returncode
 
 
+def disk_info(data):
+    """Return general, mostly static information about a disk."""
+    attrs = {
+        attr["id"]: attr["raw"]["value"] & 0xFFFFFFFF
+        for attr in data.get("ata_smart_attributes", {}).get("table", [])
+    }
+    nvme = data.get("nvme_smart_health_information_log", {})
+    rotation = data.get("rotation_rate")
+    info = {
+        "model_family": data.get("model_family"),
+        "firmware": data.get("firmware_version"),
+        "capacity": data.get("user_capacity", {}).get("bytes") or data.get("nvme_total_capacity"),
+        "protocol": data.get("device", {}).get("protocol"),
+        "interface": data.get("sata_version", {}).get("string")
+        or data.get("interface_speed", {}).get("current", {}).get("string"),
+        # 0 means a solid state disk; None means the disk does not say.
+        "rotation_rate": 0 if nvme else rotation,
+        "form_factor": data.get("form_factor", {}).get("name"),
+        "smart_passed": data.get("smart_status", {}).get("passed"),
+        "self_test_supported": bool(
+            data.get("ata_smart_data", {}).get("capabilities", {}).get("self_tests_supported")
+            or data.get("nvme_optional_admin_commands", {}).get("self_test")
+        ),
+        "power_cycles": data.get("power_cycle_count", nvme.get("power_cycles")),
+        "start_stop_count": attrs.get(4),
+        "load_cycles": attrs.get(193),
+    }
+
+    tests = (
+        data.get("ata_smart_self_test_log", {}).get("standard", {}).get("table")
+        or data.get("nvme_self_test_log", {}).get("table")
+        or []
+    )
+    if tests:
+        last = tests[0]
+        hours = data.get("power_on_time", {}).get("hours")
+        info["self_test"] = {
+            "type": last.get("type", {}).get("string"),
+            "result": last.get("status", {}).get("string"),
+            "passed": last.get("status", {}).get("passed"),
+            "hours_ago": hours - last["lifetime_hours"]
+            if hours is not None and "lifetime_hours" in last else None,
+        }
+    return {key: value for key, value in info.items() if value is not None}
+
+
 def check_disk(dev):
     data, rc = smartctl("-a", "-n", "standby", "-d", dev["type"], dev["name"])
     # A disk in standby is skipped instead of being woken up.
@@ -57,6 +107,7 @@ def check_disk(dev):
     }
     if not disk["serial"]:
         return None
+    disk.update(disk_info(data))
 
     def problem(code, severity, value=None):
         disk["problems"].append({"code": code, "severity": severity, "value": value})
@@ -95,6 +146,13 @@ def check_disk(dev):
             problem("available_spare", "critical", nvme["available_spare"])
         if nvme["percentage_used"] >= 80:
             problem("percentage_used", "warning", nvme["percentage_used"])
+
+    if disk.get("self_test_supported"):
+        hours_ago = disk.get("self_test", {}).get("hours_ago")
+        if "self_test" not in disk:
+            problem("self_test_overdue", "warning")
+        elif hours_ago is not None and hours_ago > SELF_TEST_MAX_AGE_HOURS:
+            problem("self_test_overdue", "warning", hours_ago)
 
     temp = disk["temperature"]
     if temp is not None and temp >= TEMP_CRITICAL:
@@ -193,12 +251,14 @@ def btrfs_pools(mounts, serials):
                 r"devid\s+(\d+)\s+size\s+(\d+)\s+used\s+(\d+)\s+path\s+(\S+)", show)
         ]
         profiles = {}
+        kinds = {}
         for kind, profile, used in re.findall(
             r"^(Data|Metadata|System), ([\w]+): total=\d+, used=(\d+)",
             run("btrfs", "filesystem", "df", "--raw", mount).stdout, re.M,
         ):
             profile = profile.lower()
             profiles[profile] = profiles.get(profile, 0) + int(used)
+            kinds.setdefault(kind.lower(), []).append(profile)
 
         usage = run("btrfs", "filesystem", "usage", "--raw", mount).stdout
         free = re.search(r"Free \(estimated\):\s+(\d+)", usage)
@@ -216,12 +276,19 @@ def btrfs_pools(mounts, serials):
             "size": size,
             "used": sum(profiles.values()),
             "free": int(free.group(1)) if free else None,
-            "profiles": sorted(profiles),
+            "profiles": kinds,
             "balance_running": "is running" in balance or "is paused" in balance,
+            "balance_progress": balance_progress(balance),
             "devices": devices,
             "operations": removal_operations(),
         })
     return pools
+
+
+def balance_progress(status):
+    """Return the share of a running balance that is done, in percent."""
+    match = re.search(r"(\d+)% left", status)
+    return 100 - int(match.group(1)) if match else None
 
 
 REMOVE_UNIT = "proxmox-host-monitor-remove-"

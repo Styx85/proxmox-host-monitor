@@ -252,3 +252,89 @@ async def test_removable_added_with_later_pool(hass, entry, report):
     await report({"disks": [GOOD, BAD], "pools": [_pool()]})
     assert _state(hass, "binary_sensor", "disk_BAD_removable").state == "on"
     assert _state(hass, "binary_sensor", "disk_GOOD_removable").state == "on"
+
+
+async def test_pool_lists_critical_and_warning_disks(hass, entry, report):
+    """The pool shows which of its disks are critical and which have warnings."""
+    warn = {
+        "name": "sdd",
+        "model": "WD400EB",
+        "serial": "WARN",
+        "status": "warning",
+        "problems": [{"code": "reallocated_sectors", "severity": "warning", "value": 9}],
+    }
+    other = {"name": "sdx", "model": "X", "serial": "OTHER", "status": "critical", "problems": []}
+    pool = _pool()
+    pool["devices"].append({"devid": 4, "name": "sdd", "serial": "WARN", "missing_after_removal": 0})
+    await report({"disks": [GOOD, BAD, warn, other], "pools": [pool]})
+
+    problem = _state(hass, "binary_sensor", f"pool_{UUID}_problem")
+    assert problem.state == "on"
+    assert problem.attributes["critical"] == ["sde"]
+    assert problem.attributes["warning"] == ["sdd"]
+    assert problem.attributes["problems"] == [
+        "sde pending_sectors: 1414",
+        "sdd reallocated_sectors: 9",
+    ]
+    assert _state(hass, "sensor", f"pool_{UUID}_health").state == "critical"
+
+    healthy = deepcopy(BAD) | {"status": "ok", "problems": []}
+    await report({"disks": [GOOD, healthy, warn, other], "pools": [pool]})
+    assert _state(hass, "sensor", f"pool_{UUID}_health").state == "warning"
+    assert _state(hass, "binary_sensor", f"pool_{UUID}_problem").attributes["critical"] == []
+
+
+async def test_pool_and_operation_reasons(hass, entry, report):
+    """Pool health and operations carry the event with the reason as context."""
+    from custom_components.proxmox_host_monitor.const import (
+        EVENT_HEALTH_STATUS,
+        EVENT_OPERATION,
+    )
+    from custom_components.proxmox_host_monitor.logbook import async_describe_events
+
+    health = async_capture_events(hass, EVENT_HEALTH_STATUS)
+    operations = async_capture_events(hass, EVENT_OPERATION)
+    pool = _pool(balance=True) | {"balance_progress": 50}
+    await report({"disks": [GOOD, BAD], "pools": [pool]})
+    await report({"disks": [GOOD, BAD], "pools": [pool | {"balance_progress": 60}]})
+
+    # One event for the host, one for the pool; progress alone announces nothing.
+    assert sorted(event.data["scope"] for event in health) == ["Btrfs storage", "Proxmox"]
+    assert len(operations) == 1
+    pool_event = next(event for event in health if event.data["scope"] == "Btrfs storage")
+    assert pool_event.data["critical"] == ["sde"]
+
+    problem = _state(hass, "binary_sensor", f"pool_{UUID}_problem")
+    assert problem.context.id == pool_event.context.id
+    running = _state(hass, "binary_sensor", f"pool_{UUID}_operation")
+    assert running.context.id == operations[0].context.id
+    assert running.attributes["operation"] == "balance"
+    assert _state(hass, "sensor", f"pool_{UUID}_operation").state == "balance"
+    assert _state(hass, "sensor", f"pool_{UUID}_progress").state == "60"
+    assert _state(hass, "sensor", f"pool_{UUID}_health").attributes["critical"] == ["sde"]
+
+    described = {}
+    hass.config.language = "de"
+    async_describe_events(hass, lambda domain, event_type, fn: described.update({event_type: fn}))
+    assert described[EVENT_HEALTH_STATUS](pool_event)["message"] == "Zustand kritisch: kritisch: sde"
+    assert described[EVENT_OPERATION](operations[0])["message"] == "Balance läuft (50 % erledigt)"
+
+    done = _pool()
+    await report({"disks": [GOOD, BAD], "pools": [done]})
+    assert [event.data["operation"] for event in operations] == ["balance", "idle"]
+    assert described[EVENT_OPERATION](operations[1])["message"] == "kein Vorgang mehr"
+
+
+async def test_reasons_after_restart(hass, entry, report):
+    """After a restart the restored problems are announced again."""
+    from custom_components.proxmox_host_monitor.const import EVENT_HEALTH_STATUS
+
+    await report({"disks": [GOOD, BAD], "pools": [_pool()]})
+    health = async_capture_events(hass, EVENT_HEALTH_STATUS)
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert sorted(event.data["scope"] for event in health) == ["Btrfs storage", "Proxmox"]
+    problem = _state(hass, "binary_sensor", f"pool_{UUID}_problem")
+    pool_event = next(event for event in health if event.data["scope"] == "Btrfs storage")
+    assert problem.context.id == pool_event.context.id

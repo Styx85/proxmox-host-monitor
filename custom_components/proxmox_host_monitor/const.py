@@ -18,6 +18,20 @@ SIGNAL_NEW_POOLS = f"{DOMAIN}_new_pools"
 
 # Fired for disk failures, low space and disk removals (for notifications).
 EVENT_ALERT = f"{DOMAIN}_alert"
+# Fired when the health or the problems of a disk change; the new states are
+# written in its context, so the logbook shows the reason.
+EVENT_DISK_STATUS = f"{DOMAIN}_disk_status"
+# The same for the whole host and for every Btrfs filesystem.
+EVENT_HEALTH_STATUS = f"{DOMAIN}_health_status"
+# Fired when a balance or disk removal on a Btrfs filesystem starts or ends.
+EVENT_OPERATION = f"{DOMAIN}_operation"
+
+OPERATION_IDLE = "idle"
+OPERATION_BALANCE = "balance"
+OPERATION_REMOVAL = "removal"
+OPERATIONS = (OPERATION_IDLE, OPERATION_BALANCE, OPERATION_REMOVAL)
+# Context key suffix of the operation entities of a filesystem.
+OPERATION_SUFFIX = "_operation"
 
 # The Proxmox timer reports every five minutes; allow two missed reports.
 STATUS_TIMEOUT = timedelta(minutes=15)
@@ -51,3 +65,5 @@ ACTION_BTRFS_REMOVE = "btrfs_remove"
 
 # Device identifier prefix of Btrfs pools (disks use their serial number).
 POOL_PREFIX = "pool_"
+# Key of the whole host in the health summaries.
+HOST_SCOPE = "host"

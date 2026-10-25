@@ -11,7 +11,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import ProxmoxHostConfigEntry
-from .const import DISK_STATUS_OK
+from .const import (
+    DISK_STATUS_CRITICAL,
+    DISK_STATUS_OK,
+    DISK_STATUS_WARNING,
+    OPERATION_IDLE,
+    OPERATION_SUFFIX,
+    POOL_PREFIX,
+)
 from .alerts import find_pool_device
 from .entity import (
     ProxmoxDiskEntity,
@@ -20,7 +27,7 @@ from .entity import (
     async_setup_disk_platform,
     async_setup_pool_platform,
 )
-from .helpers import format_problems
+from .helpers import format_problems, pool_operation
 
 SUMMARY_PROBLEM = BinarySensorEntityDescription(
     key="disk_problem",
@@ -37,6 +44,12 @@ DISK_PROBLEM = BinarySensorEntityDescription(
 DISK_REMOVABLE = BinarySensorEntityDescription(
     key="removable",
     translation_key="removable",
+)
+
+POOL_PROBLEM = BinarySensorEntityDescription(
+    key="problem",
+    translation_key="pool_problem",
+    device_class=BinarySensorDeviceClass.PROBLEM,
 )
 
 POOL_OPERATION = BinarySensorEntityDescription(
@@ -80,7 +93,10 @@ async def async_setup_entry(
         hass,
         entry,
         async_add_entities,
-        lambda uuid: [ProxmoxPoolOperationSensor(entry, uuid, POOL_OPERATION)]
+        lambda uuid: [
+            ProxmoxPoolOperationSensor(entry, uuid, POOL_OPERATION),
+            ProxmoxPoolProblemSensor(entry, uuid, POOL_PROBLEM),
+        ]
         + _removable(
             [device.get("serial", "") for device in runtime_data.pools[uuid].get("devices", [])]
         ),
@@ -150,22 +166,53 @@ class ProxmoxDiskRemovableSensor(ProxmoxDiskEntity, BinarySensorEntity):
 class ProxmoxPoolOperationSensor(ProxmoxPoolEntity, BinarySensorEntity):
     """On while a balance or a disk removal runs on the filesystem."""
 
+    def __init__(
+        self,
+        entry: ProxmoxHostConfigEntry,
+        uuid: str,
+        description: BinarySensorEntityDescription,
+    ) -> None:
+        """Initialize the entity."""
+        super().__init__(entry, uuid, description)
+        self._context_key = f"{POOL_PREFIX}{uuid}{OPERATION_SUFFIX}"
+
     @property
     def is_on(self) -> bool:
         """Return whether a long-running operation is active."""
-        return bool(self.pool.get("balance_running")) or any(
-            operation.get("state") == "running"
-            for operation in self.pool.get("operations", [])
-        )
+        return self._operation["operation"] != OPERATION_IDLE
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return what is running."""
+        """Return what is running and how far it is."""
+        return self._operation
+
+    @property
+    def _operation(self) -> dict[str, Any]:
+        return pool_operation(self.pool, self._entry.runtime_data.disks)
+
+
+class ProxmoxPoolProblemSensor(ProxmoxPoolEntity, BinarySensorEntity):
+    """On while a disk of the filesystem reports a problem."""
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether any disk of the filesystem has a problem."""
+        return any(disk["status"] != DISK_STATUS_OK for disk in self.member_disks)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the critical and warning disks and their problems."""
+        disks = self.member_disks
         return {
-            "balance": bool(self.pool.get("balance_running")),
-            "removals": [
-                operation.get("serial")
-                for operation in self.pool.get("operations", [])
-                if operation.get("state") == "running"
+            DISK_STATUS_CRITICAL: [
+                disk["name"] for disk in disks if disk["status"] == DISK_STATUS_CRITICAL
+            ],
+            DISK_STATUS_WARNING: [
+                disk["name"] for disk in disks if disk["status"] == DISK_STATUS_WARNING
+            ],
+            "problems": [
+                f"{disk['name']} {problem}"
+                for disk in disks
+                for problem in format_problems(disk)
             ],
         }

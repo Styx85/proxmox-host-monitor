@@ -132,6 +132,20 @@
       },
       "pool_operation": {
         "name": "Vorgang läuft"
+      },
+      "pool_problem": {
+        "name": "Festplattenproblem",
+        "state_attributes": {
+          "critical": {
+            "name": "Kritisch"
+          },
+          "warning": {
+            "name": "Warnung"
+          },
+          "problems": {
+            "name": "Probleme"
+          }
+        }
       }
     },
     "sensor": {
@@ -186,6 +200,49 @@
       },
       "pool_used": {
         "name": "Belegt"
+      },
+      "pool_health": {
+        "name": "Festplattenzustand",
+        "state": {
+          "ok": "OK",
+          "warning": "Warnung",
+          "critical": "Kritisch"
+        }
+      },
+      "self_test_age": {
+        "name": "Letzter Selbsttest"
+      },
+      "capacity": {
+        "name": "Kapazität"
+      },
+      "power_cycles": {
+        "name": "Einschaltzyklen"
+      },
+      "start_stop_count": {
+        "name": "Start/Stopp-Zyklen"
+      },
+      "load_cycles": {
+        "name": "Load-Zyklen"
+      },
+      "pool_data": {
+        "name": "Daten"
+      },
+      "pool_size": {
+        "name": "Bruttogröße"
+      },
+      "pool_devices": {
+        "name": "Platten"
+      },
+      "pool_operation": {
+        "name": "Vorgang",
+        "state": {
+          "idle": "Kein",
+          "balance": "Balance",
+          "removal": "Platten-Ausbau"
+        }
+      },
+      "pool_progress": {
+        "name": "Fortschritt"
       }
     }
   },
