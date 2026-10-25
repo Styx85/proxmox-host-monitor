@@ -427,8 +427,9 @@ def hwmon():
             limits = {}
             for limit in ("max", "crit"):
                 raw = read(f"{base}_{limit}")
-                # Some drivers report nonsense like 65261 °C instead of no limit.
-                if raw and raw.lstrip("-").isdigit() and 0 < int(raw) / 1000 < 150:
+                # Some drivers and BIOSes report nonsense like 65261 °C or 26 °C;
+                # no real component has a limit below 40 °C.
+                if raw and raw.lstrip("-").isdigit() and 40 <= int(raw) / 1000 < 150:
                     limits[limit] = int(raw) / 1000
             temperatures.append({
                 "chip": name,

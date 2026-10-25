@@ -141,3 +141,30 @@ async def test_kernel_io_errors_and_thin_pools():
     }, calls)
     assert m.kernel_io_errors() == {"sde": 2, "nvme0": 1}
     assert m.thin_pools() == [{"name": "pve/data", "data_percent": 16.75, "metadata_percent": 1.01}]
+
+
+
+async def test_hwmon_ignores_bogus_limits(tmp_path, monkeypatch):
+    """Temperature limits below 40 °C or absurdly high are ignored."""
+    chip = tmp_path / "hwmon0"
+    chip.mkdir()
+    for name, value in {
+        "name": "it8655",
+        "temp1_input": "34000",
+        "temp1_max": "26000",
+        "temp2_input": "43000",
+        "temp2_max": "70000",
+        "temp2_crit": "65261850",
+        "fan1_input": "1051",
+    }.items():
+        (chip / name).write_text(value)
+    real_glob = m.glob.glob
+    monkeypatch.setattr(
+        m.glob, "glob", lambda pattern: real_glob(pattern.replace("/sys/class/hwmon", str(tmp_path)))
+    )
+    temperatures, fans = m.hwmon()
+    assert temperatures == [
+        {"chip": "it8655", "label": "temp1", "value": 34.0},
+        {"chip": "it8655", "label": "temp2", "value": 43.0, "max": 70.0},
+    ]
+    assert fans == [{"chip": "it8655", "label": "fan1", "rpm": 1051}]

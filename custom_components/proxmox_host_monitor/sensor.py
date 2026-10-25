@@ -21,12 +21,13 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util, slugify
 
 from . import ProxmoxHostConfigEntry
 from .alerts import find_pool_device
-from .const import DISK_STATUSES, OPERATION_SUFFIX, OPERATIONS, POOL_PREFIX
+from .const import DISK_STATUSES, DOMAIN, OPERATION_SUFFIX, OPERATIONS, POOL_PREFIX
 from .entity import (
     ProxmoxDiskEntity,
     ProxmoxHostInfoEntity,
@@ -276,9 +277,16 @@ NIC_SPEED = SensorEntityDescription(
 
 
 def _host_entities(
+    hass: HomeAssistant,
     entry: ProxmoxHostConfigEntry,
 ) -> Callable[[dict[str, Any]], list[SensorEntity]]:
     """Return a factory for the host sensors of the current report."""
+    ent_reg = er.async_get(hass)
+
+    def _known(fan: dict[str, Any]) -> bool:
+        """Return whether a fan that stands still now had a sensor before."""
+        unique_id = f"host_{HOST_FAN.key}_{slugify(f'{fan.get('chip')} {fan.get('label')}')}"
+        return ent_reg.async_get_entity_id("sensor", DOMAIN, unique_id) is not None
 
     def _entities(host: dict[str, Any]) -> list[SensorEntity]:
         entities: list[SensorEntity] = [
@@ -286,7 +294,8 @@ def _host_entities(
         ]
         for kind, description, items, label in (
             ("temperatures", HOST_TEMPERATURE, host.get("temperatures", []), "sensor"),
-            ("fans", HOST_FAN, host.get("fans", []), "sensor"),
+            # A fan gets its sensor once it has turned; unused headers read 0.
+            ("fans", HOST_FAN, [f for f in host.get("fans", []) if f.get("rpm") or _known(f)], "sensor"),
             ("thin_pools", THIN_POOL, host.get("thin_pools", []), "name"),
             # Unused ports without a link would only add empty sensors.
             ("nics", NIC_SPEED, [n for n in host.get("nics", []) if n.get("state") == "up"], "name"),
@@ -346,7 +355,7 @@ async def async_setup_entry(
             ProxmoxPoolScrubSensor(entry, uuid, POOL_SCRUB),
         ],
     )
-    async_setup_host_platform(hass, entry, async_add_entities, _host_entities(entry))
+    async_setup_host_platform(hass, entry, async_add_entities, _host_entities(hass, entry))
 
 
 class ProxmoxDisksHealthSensor(ProxmoxHostSummaryEntity, SensorEntity):
