@@ -141,6 +141,10 @@ actions:
         ttl: 0
 ```
 
+### Fans and board temperatures
+
+Fans and mainboard temperatures come from the Super I/O chip, which needs a kernel driver. Run `sensors-detect` from `lm-sensors` to find the chip; load the suggested driver (for example `nct6775` or `it87`) and add it to `/etc/modules-load.d/`. Some chips, such as the ITE IT8655E on many AMD mainboards, have no driver in the Linux kernel; the community driver [frankcrawford/it87](https://github.com/frankcrawford/it87) supports them via DKMS. Fans appear in Home Assistant once they have turned; temperature limits below 40 °C reported by the chip are ignored.
+
 ## What is installed on the host
 
 | Path | Purpose |
