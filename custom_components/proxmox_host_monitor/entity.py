@@ -124,6 +124,24 @@ class ProxmoxDiskEntity(ProxmoxHostEntity):
         """Return whether the disk was part of a recent report."""
         return self._entry.runtime_data.disk_available(self._serial)
 
+    async def async_added_to_hass(self) -> None:
+        """Write reports in the context of the disk's latest status change."""
+        await Entity.async_added_to_hass(self)
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{SIGNAL_DISK_REPORT}_{self._entry.entry_id}",
+                self._async_handle_report,
+            )
+        )
+
+    @callback
+    def _async_handle_report(self) -> None:
+        # The logbook then shows the event with the reason as cause.
+        if (context := self._entry.runtime_data.contexts.get(self._serial)) is not None:
+            self.async_set_context(context)
+        self.async_write_ha_state()
+
 
 class ProxmoxPoolEntity(ProxmoxHostEntity):
     """Entity of a Btrfs filesystem on the host."""

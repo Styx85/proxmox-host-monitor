@@ -11,7 +11,7 @@ from aiohttp.hdrs import METH_POST
 from homeassistant.components import webhook
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, Context, HomeAssistant, callback
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -31,6 +31,7 @@ from .const import (
     DISK_REPORT_TIMEOUT,
     DISK_STATUSES,
     DOMAIN,
+    EVENT_DISK_STATUS,
     ISSUE_REBOOT_BUTTON_UNAVAILABLE,
     LEGACY_DOMAIN,
     POOL_PREFIX,
@@ -42,6 +43,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .alerts import async_update_alerts
+from .helpers import format_problems
 from .installer import async_register_install_view
 
 _LOGGER = logging.getLogger(__name__)
@@ -71,6 +73,8 @@ class ProxmoxHostRuntimeData:
     removals: dict[str, str] = field(default_factory=dict)
     # Alerts already announced, so every alert fires once.
     alerted: set[str] = field(default_factory=set)
+    # Context of the latest status change per disk, for the logbook.
+    contexts: dict[str, Context] = field(default_factory=dict)
     node_device: dr.DeviceEntry | None = None
     cancel_disk_timeout: CALLBACK_TYPE | None = None
 
@@ -262,6 +266,44 @@ def _schedule_disk_timeout(
     runtime_data.cancel_disk_timeout = async_call_later(hass, remaining, _expired)
 
 
+def _problem_codes(disk: dict[str, Any] | None) -> list[str]:
+    return [
+        problem.get("code", "")
+        for problem in (disk or {}).get("problems", [])
+        if isinstance(problem, dict)
+    ]
+
+
+@callback
+def _async_announce_status(
+    hass: HomeAssistant,
+    entry: ProxmoxHostConfigEntry,
+    previous: dict[str, Any] | None,
+    disk: dict[str, Any],
+) -> None:
+    """Fire an event when the health or problems of a disk change."""
+    if previous is not None and (previous["status"], _problem_codes(previous)) == (
+        disk["status"],
+        _problem_codes(disk),
+    ):
+        return
+
+    context = Context()
+    entry.runtime_data.contexts[disk["serial"]] = context
+    hass.bus.async_fire(
+        EVENT_DISK_STATUS,
+        {
+            "disk": disk["name"],
+            "model": disk.get("model") or "",
+            "serial": disk["serial"],
+            "status": disk["status"],
+            "previous": previous["status"] if previous else None,
+            "problems": format_problems(disk),
+        },
+        context=context,
+    )
+
+
 @callback
 def _async_update_disk_devices(
     hass: HomeAssistant,
@@ -376,6 +418,7 @@ async def async_handle_webhook(
             disk["serial"] for disk in disks if disk["serial"] not in runtime_data.disks
         ]
         for disk in disks:
+            _async_announce_status(hass, entry, runtime_data.disks.get(disk["serial"]), disk)
             runtime_data.disks[disk["serial"]] = disk
         _async_update_disk_devices(hass, entry, disks)
         runtime_data.present = {disk["serial"] for disk in disks}

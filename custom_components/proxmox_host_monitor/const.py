@@ -18,6 +18,9 @@ SIGNAL_NEW_POOLS = f"{DOMAIN}_new_pools"
 
 # Fired for disk failures, low space and disk removals (for notifications).
 EVENT_ALERT = f"{DOMAIN}_alert"
+# Fired when the health or the problems of a disk change; the new states are
+# written in its context, so the logbook shows the reason.
+EVENT_DISK_STATUS = f"{DOMAIN}_disk_status"
 
 # The Proxmox timer reports every five minutes; allow two missed reports.
 STATUS_TIMEOUT = timedelta(minutes=15)

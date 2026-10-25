@@ -215,9 +215,6 @@
       "capacity": {
         "name": "Kapazität"
       },
-      "age": {
-        "name": "Alter"
-      },
       "power_cycles": {
         "name": "Einschaltzyklen"
       },

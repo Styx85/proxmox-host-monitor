@@ -215,9 +215,6 @@
       "capacity": {
         "name": "Capacity"
       },
-      "age": {
-        "name": "Age"
-      },
       "power_cycles": {
         "name": "Power cycles"
       },

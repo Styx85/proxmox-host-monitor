@@ -30,9 +30,7 @@ from .entity import (
     async_setup_disk_platform,
     async_setup_pool_platform,
 )
-from .helpers import free_share
-
-HOURS_PER_YEAR = 24 * 365.25
+from .helpers import format_problems, free_share
 
 SUMMARY_HEALTH = SensorEntityDescription(
     key="disk_health",
@@ -112,31 +110,20 @@ DISK_SENSORS = (
         suggested_display_precision=0,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
-    ProxmoxDiskSensorDescription(
-        key="age",
-        translation_key="age",
-        native_unit_of_measurement=UnitOfTime.YEARS,
-        suggested_display_precision=1,
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda disk: (
-            round(disk["power_on_hours"] / HOURS_PER_YEAR, 2)
-            if disk.get("power_on_hours") is not None
-            else None
-        ),
-    ),
     _counter("crc_errors", EntityCategory.DIAGNOSTIC),
     _counter("command_timeouts", EntityCategory.DIAGNOSTIC),
     _counter("power_cycles", EntityCategory.DIAGNOSTIC, SensorStateClass.TOTAL_INCREASING),
     _counter("start_stop_count", EntityCategory.DIAGNOSTIC, SensorStateClass.TOTAL_INCREASING),
     _counter("load_cycles", EntityCategory.DIAGNOSTIC, SensorStateClass.TOTAL_INCREASING),
+    # SMART only counts the hours a disk ran, not its age since manufacture.
     ProxmoxDiskSensorDescription(
         key="power_on_hours",
         translation_key="power_on_hours",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.HOURS,
+        suggested_unit_of_measurement=UnitOfTime.DAYS,
+        suggested_display_precision=0,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        entity_category=EntityCategory.DIAGNOSTIC,
     ),
 )
 
@@ -249,6 +236,7 @@ class ProxmoxDiskHealthSensor(ProxmoxDiskEntity, SensorEntity):
             "rotation_rate": "SSD" if rotation == 0 else rotation,
             "form_factor": disk.get("form_factor"),
             "smart_passed": disk.get("smart_passed"),
+            "problems": format_problems(disk),
             "self_test": disk.get("self_test"),
             "pool": pool["mount"] if pool else None,
             "pool_allocated": device.get("used") if device else None,

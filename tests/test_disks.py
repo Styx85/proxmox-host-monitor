@@ -252,7 +252,9 @@ async def test_disk_info(hass, entry, hass_client_no_auth):
     }
     await _report(hass_client_no_auth, hass, [disk])
 
-    assert float(hass.states.get(_entity_id(hass, "disk_WW6099YV_age")).state) == 2.0
+    power_on = hass.states.get(_entity_id(hass, "disk_WW6099YV_power_on_hours"))
+    assert power_on.attributes["unit_of_measurement"] == "d"
+    assert round(float(power_on.state)) == 730
     assert hass.states.get(_entity_id(hass, "disk_WW6099YV_power_cycles")).state == "45"
     self_test = hass.states.get(_entity_id(hass, "disk_WW6099YV_self_test_age"))
     assert self_test.state == "5"
@@ -285,3 +287,36 @@ async def test_new_values_of_known_disks(hass, entry, hass_client_no_auth):
     count = len(hass.states.async_entity_ids("sensor"))
     await _report(hass_client_no_auth, hass, [newer])
     assert len(hass.states.async_entity_ids("sensor")) == count
+
+
+async def test_status_change_reason(hass, entry, hass_client_no_auth):
+    """A health change fires an event whose context the new states carry."""
+    from pytest_homeassistant_custom_component.common import async_capture_events
+
+    from custom_components.proxmox_host_monitor.const import EVENT_DISK_STATUS
+    from custom_components.proxmox_host_monitor.logbook import async_describe_events
+
+    events = async_capture_events(hass, EVENT_DISK_STATUS)
+    await _report(hass_client_no_auth, hass, [HEALTHY])
+    assert [event.data["status"] for event in events] == ["ok"]
+
+    overdue = deepcopy(HEALTHY) | {
+        "status": "warning",
+        "problems": [{"code": "self_test_overdue", "severity": "warning", "value": None}],
+    }
+    await _report(hass_client_no_auth, hass, [overdue])
+    await _report(hass_client_no_auth, hass, [overdue])
+    assert [event.data["status"] for event in events] == ["ok", "warning"]
+
+    health = hass.states.get(_entity_id(hass, "disk_WW6099YV_health"))
+    assert health.state == "warning"
+    assert health.context.id == events[-1].context.id
+    assert health.attributes["problems"] == ["self_test_overdue"]
+
+    described = {}
+    hass.config.language = "de"
+    async_describe_events(hass, lambda domain, event_type, fn: described.update({event_type: fn}))
+    assert described[EVENT_DISK_STATUS](events[-1]) == {
+        "name": "ST4000VX016 sda",
+        "message": "Zustand Warnung: Selbsttest überfällig (Stunden)",
+    }

@@ -22,7 +22,7 @@ Proxmox Host Monitor replaces **Proxmox Reboot Update**. An existing installatio
 **Disk health**
 
 - One device per disk (by serial number) with a problem sensor, health and the relevant SMART values: temperature, pending, reallocated and uncorrectable sectors, CRC errors, command timeouts, power-on time, NVMe wear and media errors.
-- General disk information: capacity, age, power cycles, start/stop and load cycles, time since the last self-test (with its result), and as attributes of the health sensor the device path, model family, firmware, interface, rotation rate or SSD, form factor and the Btrfs filesystem the disk belongs to.
+- General disk information: capacity, power-on time in days (SMART counts running hours, not the age since manufacture), power cycles, start/stop and load cycles, time since the last self-test (with its result), and as attributes of the health sensor the device path, model family, firmware, interface, rotation rate or SSD, form factor and the Btrfs filesystem the disk belongs to.
 - Btrfs device error counters per disk.
 - Summary entities `Disk problem` and `Disk health` on the Proxmox node.
 - New disks appear automatically. Removed disks become unavailable and can be deleted from the device page.
