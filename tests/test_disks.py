@@ -86,6 +86,13 @@ async def _report(hass_client_no_auth, hass, disks) -> int:
     return resp.status
 
 
+def _disk_device(hass: HomeAssistant, entry: MockConfigEntry, serial: str):
+    dev_reg = dr.async_get(hass)
+    if hasattr(dev_reg, "async_get_device_by_identifier"):
+        return dev_reg.async_get_device_by_identifier((DOMAIN, serial), entry.entry_id)
+    return dev_reg.async_get_device(identifiers={(DOMAIN, serial)})
+
+
 def _entity_id(hass: HomeAssistant, unique_id: str, domain: str = "sensor") -> str:
     entity_id = er.async_get(hass).async_get_entity_id(domain, DOMAIN, unique_id)
     assert entity_id is not None, unique_id
@@ -130,9 +137,7 @@ async def test_disk_report_creates_entities(hass, entry, hass_client_no_auth):
         "sensor", DOMAIN, "disk_WW6099YV_media_errors"
     ) is None
 
-    device = dr.async_get(hass).async_get_device_by_identifier(
-        (DOMAIN, "WD-WMATV1460428"), entry.entry_id
-    )
+    device = _disk_device(hass, entry, "WD-WMATV1460428")
     assert device.name == "WDC WD1001FALS WD-WMATV1460428"
     assert device.serial_number == "WD-WMATV1460428"
 
@@ -215,10 +220,7 @@ async def test_combined_report(hass, entry, hass_client_no_auth):
 async def test_remove_absent_disk_device(hass, entry, hass_client_no_auth):
     """Only disks missing from the latest report can be removed."""
     await _report(hass_client_no_auth, hass, [HEALTHY, FAILING])
-    dev_reg = dr.async_get(hass)
-    failing = dev_reg.async_get_device_by_identifier(
-        (DOMAIN, "WD-WMATV1460428"), entry.entry_id
-    )
+    failing = _disk_device(hass, entry, "WD-WMATV1460428")
     assert not await async_remove_config_entry_device(hass, entry, failing)
 
     await _report(hass_client_no_auth, hass, [HEALTHY])

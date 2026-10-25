@@ -13,6 +13,19 @@ from . import ProxmoxHostConfigEntry
 from .const import DOMAIN, SIGNAL_DISK_REPORT, SIGNAL_NEW_DISKS
 
 
+def _via_node(entry: ProxmoxHostConfigEntry) -> dict[str, Any]:
+    """Link a disk to the Proxmox node device.
+
+    Newer Home Assistant versions replaced via_device by via_device_id.
+    """
+    node = entry.runtime_data.node_device
+    if node is None:
+        return {}
+    if "via_device_id" in DeviceInfo.__annotations__:
+        return {"via_device_id": node.id}
+    return {"via_device": next(iter(node.identifiers))}
+
+
 def format_problems(disk: dict[str, Any]) -> list[str]:
     """Return the problems of a disk as short, language-neutral strings."""
     return [
@@ -96,13 +109,12 @@ class ProxmoxDiskEntity(ProxmoxHostEntity):
         self._attr_unique_id = f"disk_{serial}_{description.key}"
 
         model = self.disk.get("model") or "Disk"
-        node = entry.runtime_data.node_device
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
             name=f"{model} {serial}",
             model=self.disk.get("model") or None,
             serial_number=serial,
-            via_device_id=node.id if node else None,
+            **_via_node(entry),
         )
 
     @property
