@@ -98,10 +98,18 @@ async def test_host_entities(hass, entry, report):
 
 
 async def test_new_host_sensors_are_added(hass, entry, report):
-    """Sensors that appear later get their entities."""
-    await report(_host())
-    await report(_host(fans=[{"chip": "nct6798", "label": "fan2", "rpm": 812}]))
-    assert _state(hass, "sensor", "host_fan_nct6798_fan2").state == "812"
+    """Sensors that appear later get their entities; idle fan headers do not."""
+    await report(_host(fans=[{"chip": "it8655", "label": "fan2", "rpm": 0}]))
+    assert er.async_get(hass).async_get_entity_id("sensor", DOMAIN, "host_fan_it8655_fan2") is None
+
+    await report(_host(fans=[{"chip": "it8655", "label": "fan1", "rpm": 1051}]))
+    assert _state(hass, "sensor", "host_fan_it8655_fan1").state == "1051"
+
+    # A fan that stops keeps its sensor, also after a restart.
+    await report(_host(fans=[{"chip": "it8655", "label": "fan1", "rpm": 0}]))
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert _state(hass, "sensor", "host_fan_it8655_fan1").state == "0"
 
 
 async def test_host_problems(hass, entry, report):
