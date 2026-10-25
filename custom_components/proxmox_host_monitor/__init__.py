@@ -413,6 +413,7 @@ async def async_handle_webhook(
         response["disks"] = len(disks)
 
         new_pools: list[str] = []
+        previous_pools = runtime_data.pools
         if pools is not None:
             new_pools = [pool["uuid"] for pool in pools if pool["uuid"] not in runtime_data.pools]
             runtime_data.pools = {pool["uuid"]: pool for pool in pools}
@@ -424,6 +425,7 @@ async def async_handle_webhook(
             hass,
             entry,
             command_results if isinstance(command_results, list) else None,
+            previous_pools,
         )
 
         # The disk report is the host's channel for commands.

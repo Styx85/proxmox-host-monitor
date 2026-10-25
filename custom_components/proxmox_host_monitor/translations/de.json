@@ -241,7 +241,8 @@
         "state": {
           "idle": "Kein",
           "balance": "Balance",
-          "removal": "Platten-Ausbau"
+          "removal": "Platten-Ausbau",
+          "scrub": "Scrub"
         }
       },
       "pool_progress": {

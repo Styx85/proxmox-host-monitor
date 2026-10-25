@@ -241,7 +241,8 @@
         "state": {
           "idle": "None",
           "balance": "Balance",
-          "removal": "Disk removal"
+          "removal": "Disk removal",
+          "scrub": "Scrub"
         }
       },
       "pool_progress": {

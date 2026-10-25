@@ -30,6 +30,13 @@ TEXTS: dict[str, dict[str, str]] = {
         "balance_progress": "balance running ({progress} % done)",
         "removal": "removing {disks}",
         "idle": "no operation running",
+        "scrub": "scrub running",
+        "scrub_progress": "scrub running ({progress} % done)",
+        "scrub_finished": "scrub of {pool} finished: {result_text}",
+        "scrub_ok": "no errors",
+        "scrub_repaired": "errors repaired",
+        "scrub_uncorrectable": "uncorrectable errors",
+        "scrub_aborted": "not completed",
         "disk_failing": "disk {disk} is failing",
         "pool_space_low": "{pool} is running out of space",
         "removal_requested": "removal of {disk} requested",
@@ -85,6 +92,13 @@ TEXTS: dict[str, dict[str, str]] = {
         "balance_progress": "Balance läuft ({progress} % erledigt)",
         "removal": "Ausbau von {disks} läuft",
         "idle": "kein Vorgang mehr",
+        "scrub": "Scrub läuft",
+        "scrub_progress": "Scrub läuft ({progress} % erledigt)",
+        "scrub_finished": "Scrub von {pool} fertig: {result_text}",
+        "scrub_ok": "ohne Fehler",
+        "scrub_repaired": "Fehler repariert",
+        "scrub_uncorrectable": "nicht reparierbare Fehler",
+        "scrub_aborted": "nicht abgeschlossen",
         "disk_failing": "Festplatte {disk} fällt aus",
         "pool_space_low": "{pool} wird voll",
         "removal_requested": "Ausbau von {disk} beauftragt",
@@ -171,6 +185,8 @@ def async_describe_events(
         data = {"disk": "", "pool": "", "reason": "", "item": "", **event.data}
         if data["type"] == "host_problem":
             data["code"] = texts.get(data.get("code", ""), data.get("code", ""))
+        if data["type"] == "scrub_finished":
+            data["result_text"] = texts.get(f"scrub_{data.get('result')}", data.get("result"))
         template = texts.get(data["type"], data["type"])
         return {"name": "Proxmox Host Monitor", "message": template.format(**data)}
 
@@ -195,8 +211,8 @@ def async_describe_events(
     def describe_operation(event: Event) -> dict[str, str]:
         data: dict[str, Any] = event.data
         operation = data["operation"]
-        if operation == "balance" and data.get("progress") is not None:
-            message = texts["balance_progress"].format(progress=data["progress"])
+        if operation in ("balance", "scrub") and data.get("progress") is not None:
+            message = texts[f"{operation}_progress"].format(progress=data["progress"])
         else:
             message = texts[operation].format(disks=", ".join(data.get("disks", [])))
         return _linked(data, {"name": data["scope"], "message": message})

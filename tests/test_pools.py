@@ -349,3 +349,46 @@ async def test_reasons_after_restart(hass, entry, report):
     described = {}
     async_describe_events(hass, lambda domain, event_type, fn: described.update({event_type: fn}))
     assert described[EVENT_HEALTH_STATUS](pool_event)["entity_id"] == health_sensor
+
+
+@pytest.mark.parametrize(
+    ("result_scrub", "result"),
+    [
+        ({"status": "finished", "errors": 0, "corrected": 0, "uncorrectable": 0}, "ok"),
+        ({"status": "finished", "errors": 3, "corrected": 3, "uncorrectable": 0}, "repaired"),
+        ({"status": "finished", "errors": 2, "corrected": 0, "uncorrectable": 2}, "uncorrectable"),
+        ({"status": "aborted", "errors": 0, "corrected": 0, "uncorrectable": 0}, "aborted"),
+    ],
+)
+async def test_scrub_finished(hass, entry, report, result_scrub, result):
+    """A running scrub shows as operation and is announced once when it ends."""
+    from custom_components.proxmox_host_monitor.logbook import async_describe_events
+
+    events = async_capture_events(hass, EVENT_ALERT)
+    running = _pool() | {"scrub": {"last": 1792960610.0, "status": "running", "progress": 10.2}}
+    await report({"disks": [GOOD], "pools": [running]})
+    assert _state(hass, "sensor", f"pool_{UUID}_operation").state == "scrub"
+    assert _state(hass, "sensor", f"pool_{UUID}_progress").state == "10.2"
+
+    done = _pool() | {"scrub": {"last": 1792960610.0, "duration": 4380, **result_scrub}}
+    await report({"disks": [GOOD], "pools": [done]})
+    await report({"disks": [GOOD], "pools": [done]})
+    finished = [event for event in events if event.data["type"] == "scrub_finished"]
+    assert len(finished) == 1
+    assert finished[0].data["result"] == result
+    assert finished[0].data["pool"] == "/mnt/storage"
+    assert _state(hass, "sensor", f"pool_{UUID}_operation").state == "idle"
+
+    described = {}
+    hass.config.language = "de"
+    async_describe_events(hass, lambda domain, event_type, fn: described.update({event_type: fn}))
+    assert described[EVENT_ALERT](finished[0])["message"].startswith("Scrub von /mnt/storage fertig: ")
+
+
+async def test_old_scrub_not_announced(hass, entry, report):
+    """The result of a scrub that ended before the first report is not announced."""
+    events = async_capture_events(hass, EVENT_ALERT)
+    old = _pool() | {"scrub": {"last": 1700000000.0, "status": "finished", "errors": 0}}
+    await report({"disks": [GOOD], "pools": [old]})
+    await report({"disks": [GOOD], "pools": [old]})
+    assert not [event for event in events if event.data["type"] == "scrub_finished"]

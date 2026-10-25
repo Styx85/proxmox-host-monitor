@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from .const import OPERATION_BALANCE, OPERATION_IDLE, OPERATION_REMOVAL
+from .const import OPERATION_BALANCE, OPERATION_IDLE, OPERATION_REMOVAL, OPERATION_SCRUB
 
 
 def format_problems(disk: dict[str, Any]) -> list[str]:
@@ -31,7 +31,7 @@ def free_share(pool: dict[str, Any]) -> float | None:
 def pool_operation(
     pool: dict[str, Any], disks: dict[str, dict[str, Any]]
 ) -> dict[str, Any]:
-    """Return what runs on a Btrfs filesystem: a disk removal, a balance or nothing."""
+    """Return what runs on a Btrfs filesystem: a removal, a balance, a scrub or nothing."""
     removing = [
         disks.get(operation.get("serial"), {}).get("name") or operation.get("serial")
         for operation in pool.get("operations", [])
@@ -45,6 +45,9 @@ def pool_operation(
             "disks": [],
             "progress": pool.get("balance_progress"),
         }
+    scrub = pool.get("scrub") or {}
+    if scrub.get("status") == "running":
+        return {"operation": OPERATION_SCRUB, "disks": [], "progress": scrub.get("progress")}
     return {"operation": OPERATION_IDLE, "disks": [], "progress": None}
 
 
@@ -66,3 +69,14 @@ def format_host_problems(host: dict[str, Any]) -> list[str]:
             text += f": {problem['value']}"
         result.append(text)
     return result
+
+
+def scrub_result(scrub: dict[str, Any]) -> str:
+    """Return ok, repaired, uncorrectable or aborted for a finished scrub."""
+    if scrub.get("uncorrectable"):
+        return "uncorrectable"
+    if scrub.get("status") != "finished":
+        return "aborted"
+    if scrub.get("errors") or scrub.get("corrected"):
+        return "repaired"
+    return "ok"

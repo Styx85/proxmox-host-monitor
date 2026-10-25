@@ -19,7 +19,7 @@ from .const import (
     ISSUE_REMOVAL_FAILED,
     POOL_FREE_WARNING,
 )
-from .helpers import format_problems, free_share, host_problem_key
+from .helpers import format_problems, free_share, host_problem_key, scrub_result
 
 if TYPE_CHECKING:
     from . import ProxmoxHostConfigEntry, ProxmoxHostRuntimeData
@@ -69,10 +69,14 @@ def async_update_alerts(
     hass: HomeAssistant,
     entry: ProxmoxHostConfigEntry,
     command_results: list[dict[str, Any]] | None = None,
+    previous_pools: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Create or clear repair issues and fire events after a report."""
     runtime_data = entry.runtime_data
     active: set[str] = set()
+
+    for uuid, pool in runtime_data.pools.items():
+        _async_check_scrub(hass, pool, (previous_pools or {}).get(uuid))
 
     for result in command_results or []:
         serial = str(result.get("serial", ""))
@@ -293,4 +297,34 @@ def _async_removal_failed(
         disk=disk.get("name", ""),
         serial=serial,
         reason=reason,
+    )
+
+
+@callback
+def _async_check_scrub(
+    hass: HomeAssistant,
+    pool: dict[str, Any],
+    previous: dict[str, Any] | None,
+) -> None:
+    """Announce a scrub that finished since the previous report."""
+    scrub = pool.get("scrub") or {}
+    before = (previous or {}).get("scrub") or {}
+    if not scrub.get("last") or scrub.get("status") == "running":
+        return
+    # Only a scrub seen running before, or one that started after the
+    # previous report, is new; the result of an old scrub is not repeated.
+    if before.get("last") == scrub["last"] and before.get("status") != "running":
+        return
+    if previous is None:
+        return
+    _fire(
+        hass,
+        "scrub_finished",
+        pool=pool["mount"],
+        result=scrub_result(scrub),
+        status=scrub.get("status"),
+        duration=scrub.get("duration"),
+        errors=scrub.get("errors", 0),
+        corrected=scrub.get("corrected", 0),
+        uncorrectable=scrub.get("uncorrectable", 0),
     )

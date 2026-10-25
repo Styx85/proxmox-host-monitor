@@ -309,6 +309,9 @@ def balance_progress(status):
 def scrub_status(mount):
     """Return the result of the last scrub, or None if there never was one."""
     status = run("btrfs", "scrub", "status", "-R", mount).stdout
+    progress = re.search(
+        r"Bytes scrubbed:.*\(([\d.]+)%\)", run("btrfs", "scrub", "status", mount).stdout
+    )
     started = re.search(r"Scrub started:\s+(.+)", status)
     if not started:
         return None
@@ -331,6 +334,7 @@ def scrub_status(mount):
         "errors": sum(count(n) for n in ("read_errors", "csum_errors", "verify_errors", "super_errors")),
         "corrected": count("corrected_errors"),
         "uncorrectable": count("uncorrectable_errors"),
+        "progress": float(progress.group(1)) if progress else None,
     }
 
 
