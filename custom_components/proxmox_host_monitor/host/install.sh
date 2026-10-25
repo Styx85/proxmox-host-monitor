@@ -200,9 +200,12 @@ for unit in $OWN_UNITS; do
     systemctl enable --now "$unit.timer"
 done
 # Until the setup in Home Assistant is finished, the webhook may still reject
-# reports; the timers retry, so a failed first report is not fatal.
+# reports, so a failed first report is retried shortly after instead of failing.
 for unit in $OWN_UNITS; do
-    systemctl start "$unit.service" \
-        || echo "Warning: the first report of $unit failed. The timer retries automatically." >&2
+    if ! systemctl start "$unit.service"; then
+        echo "Warning: the first report of $unit failed. The timer retries automatically." >&2
+        systemd-run --quiet --on-active=2min --unit="$unit-retry" \
+            systemctl start "$unit.service" 2>/dev/null || true
+    fi
 done
 echo "Proxmox Host Monitor $VERSION installed."
