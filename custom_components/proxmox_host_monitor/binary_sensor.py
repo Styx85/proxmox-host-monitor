@@ -52,23 +52,38 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the disk problem sensors."""
+    runtime_data = entry.runtime_data
+    removable_added: set[str] = set()
+
+    def _removable(serials: list[str]) -> list[BinarySensorEntity]:
+        """Add the removable sensor once a disk is known and in a pool."""
+        entities: list[BinarySensorEntity] = []
+        for serial in serials:
+            if (
+                serial in runtime_data.disks
+                and serial not in removable_added
+                and find_pool_device(runtime_data, serial)[1] is not None
+            ):
+                removable_added.add(serial)
+                entities.append(ProxmoxDiskRemovableSensor(entry, serial, DISK_REMOVABLE))
+        return entities
+
     async_setup_disk_platform(
         hass,
         entry,
         async_add_entities,
         lambda: [ProxmoxDisksProblemSensor(entry, SUMMARY_PROBLEM)],
         lambda serial: [ProxmoxDiskProblemSensor(entry, serial, DISK_PROBLEM)]
-        + (
-            [ProxmoxDiskRemovableSensor(entry, serial, DISK_REMOVABLE)]
-            if find_pool_device(entry.runtime_data, serial)[1] is not None
-            else []
-        ),
+        + _removable([serial]),
     )
     async_setup_pool_platform(
         hass,
         entry,
         async_add_entities,
-        lambda uuid: [ProxmoxPoolOperationSensor(entry, uuid, POOL_OPERATION)],
+        lambda uuid: [ProxmoxPoolOperationSensor(entry, uuid, POOL_OPERATION)]
+        + _removable(
+            [device.get("serial", "") for device in runtime_data.pools[uuid].get("devices", [])]
+        ),
     )
 
 

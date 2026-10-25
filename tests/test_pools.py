@@ -239,3 +239,15 @@ async def test_pool_space_low(hass, entry, report):
 async def test_invalid_pools(hass, entry, report):
     """Malformed pool reports are rejected."""
     assert "error" in await report({"disks": [GOOD], "pools": [{"mount": "/x"}]})
+
+
+async def test_removable_added_with_later_pool(hass, entry, report):
+    """Disks known before their pool still get the removable sensor."""
+    await report({"disks": [GOOD, BAD]})
+    assert (
+        er.async_get(hass).async_get_entity_id("binary_sensor", DOMAIN, "disk_BAD_removable")
+        is None
+    )
+    await report({"disks": [GOOD, BAD], "pools": [_pool()]})
+    assert _state(hass, "binary_sensor", "disk_BAD_removable").state == "on"
+    assert _state(hass, "binary_sensor", "disk_GOOD_removable").state == "on"
