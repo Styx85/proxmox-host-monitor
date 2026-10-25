@@ -1,0 +1,163 @@
+#!/usr/bin/python3 -I
+"""Report SMART and Btrfs disk health to Home Assistant (Proxmox Host Monitor).
+
+Runs from proxmox-host-monitor-disks.timer and immediately when smartd raises
+a warning. The evaluation is deliberately strict: every pending or
+uncorrectable sector and every Btrfs device error counts as critical.
+"""
+
+import json
+import re
+import subprocess
+import sys
+import urllib.request
+
+WEBHOOK_URL_FILE = "/etc/proxmox-host-monitor/webhook-url"
+
+TEMP_WARNING = 50
+TEMP_CRITICAL = 55
+
+# ATA attribute id: (key, severity when the raw value is above zero)
+ATA_CHECKS = {
+    5: ("reallocated_sectors", "warning"),
+    187: ("reported_uncorrectable", "critical"),
+    188: ("command_timeouts", "warning"),
+    197: ("pending_sectors", "critical"),
+    198: ("offline_uncorrectable", "critical"),
+    199: ("crc_errors", "warning"),
+}
+
+RANK = {"ok": 0, "warning": 1, "critical": 2}
+
+
+def smartctl(*args):
+    result = subprocess.run(
+        ["smartctl", "-j", *args], capture_output=True, text=True, check=False
+    )
+    try:
+        return json.loads(result.stdout), result.returncode
+    except json.JSONDecodeError:
+        return {}, result.returncode
+
+
+def check_disk(dev):
+    data, rc = smartctl("-a", "-n", "standby", "-d", dev["type"], dev["name"])
+    # A disk in standby is skipped instead of being woken up.
+    if rc & 2 and not data.get("smart_status"):
+        return None
+
+    disk = {
+        "name": dev["name"].removeprefix("/dev/"),
+        "model": data.get("model_name", ""),
+        "serial": data.get("serial_number", ""),
+        "status": "ok",
+        "temperature": data.get("temperature", {}).get("current"),
+        "power_on_hours": data.get("power_on_time", {}).get("hours"),
+        "problems": [],
+    }
+    if not disk["serial"]:
+        return None
+
+    def problem(code, severity, value=None):
+        disk["problems"].append({"code": code, "severity": severity, "value": value})
+        if RANK[severity] > RANK[disk["status"]]:
+            disk["status"] = severity
+
+    if data.get("smart_status", {}).get("passed") is False:
+        problem("smart_failed", "critical")
+    if rc & 8:
+        problem("failure_predicted", "critical")
+    if rc & 16:
+        problem("prefail_in_past", "warning")
+    if rc & 64:
+        problem("error_log", "warning")
+    if rc & 128:
+        problem("self_test_failed", "warning")
+
+    for attr in data.get("ata_smart_attributes", {}).get("table", []):
+        if attr["id"] in ATA_CHECKS:
+            key, severity = ATA_CHECKS[attr["id"]]
+            # Some vendors pack extra data into the upper bytes.
+            value = attr["raw"]["value"] & 0xFFFFFFFF
+            disk[key] = value
+            if value > 0:
+                problem(key, severity, value)
+
+    nvme = data.get("nvme_smart_health_information_log")
+    if nvme:
+        disk["percentage_used"] = nvme["percentage_used"]
+        disk["media_errors"] = nvme["media_errors"]
+        if nvme["critical_warning"]:
+            problem("nvme_critical_warning", "critical", nvme["critical_warning"])
+        if nvme["media_errors"]:
+            problem("media_errors", "critical", nvme["media_errors"])
+        if nvme["available_spare"] < nvme["available_spare_threshold"]:
+            problem("available_spare", "critical", nvme["available_spare"])
+        if nvme["percentage_used"] >= 80:
+            problem("percentage_used", "warning", nvme["percentage_used"])
+
+    temp = disk["temperature"]
+    if temp is not None and temp >= TEMP_CRITICAL:
+        problem("temperature", "critical", temp)
+    elif temp is not None and temp >= TEMP_WARNING:
+        problem("temperature", "warning", temp)
+
+    return disk
+
+
+def btrfs_errors():
+    """Return the summed Btrfs device error counters per disk name."""
+    # One mount point per filesystem; subvolume mounts share the counters.
+    mounts = {}
+    for line in subprocess.run(
+        ["findmnt", "-rn", "-t", "btrfs", "-o", "UUID,TARGET"],
+        capture_output=True, text=True, check=False,
+    ).stdout.splitlines():
+        uuid, _, target = line.partition(" ")
+        mounts.setdefault(uuid, target)
+
+    errors = {}
+    for mount in mounts.values():
+        stats = subprocess.run(
+            ["btrfs", "device", "stats", mount],
+            capture_output=True, text=True, check=False,
+        ).stdout
+        for line in stats.splitlines():
+            match = re.match(r"\[/dev/(sd[a-z]+|nvme\d+)\S*\]\.\w+\s+(\d+)", line)
+            if match:
+                errors[match.group(1)] = errors.get(match.group(1), 0) + int(match.group(2))
+    return errors
+
+
+def main():
+    scan, _ = smartctl("--scan-open")
+    disks = [d for d in (check_disk(dev) for dev in scan.get("devices", [])) if d]
+
+    errors = btrfs_errors()
+    for disk in disks:
+        if disk["name"] in errors:
+            disk["btrfs_errors"] = errors[disk["name"]]
+            if errors[disk["name"]]:
+                disk["problems"].append(
+                    {"code": "btrfs_errors", "severity": "critical", "value": errors[disk["name"]]}
+                )
+                disk["status"] = "critical"
+
+    payload = {"disks": disks}
+    if "--dry-run" in sys.argv:
+        print(json.dumps(payload, indent=1))
+        return
+
+    with open(WEBHOOK_URL_FILE, encoding="utf-8") as file:
+        url = file.read().strip()
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    print(urllib.request.urlopen(request, timeout=10).read().decode())
+
+
+if __name__ == "__main__":
+    main()

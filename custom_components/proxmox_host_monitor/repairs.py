@@ -1,4 +1,4 @@
-"""Repair flows for Proxmox Reboot Update."""
+"""Repair flows for Proxmox Host Monitor."""
 
 import voluptuous as vol
 

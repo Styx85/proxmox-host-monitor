@@ -9,13 +9,13 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 
-from custom_components.proxmox_reboot_update.const import (
+from custom_components.proxmox_host_monitor.const import (
     CONF_REBOOT_BUTTON,
     CONF_WEBHOOK_ID,
     DOMAIN,
     ISSUE_REBOOT_BUTTON_UNAVAILABLE,
 )
-from custom_components.proxmox_reboot_update.repairs import async_create_fix_flow
+from custom_components.proxmox_host_monitor.repairs import async_create_fix_flow
 
 BUTTON = "button.pve_reboot"
 NEW_BUTTON = "button.pve_reboot_new"
@@ -25,7 +25,7 @@ async def _setup(hass: HomeAssistant) -> MockConfigEntry:
     assert await async_setup_component(hass, "http", {})
     entry = MockConfigEntry(
         domain=DOMAIN,
-        version=2,
+        version=1,
         unique_id=DOMAIN,
         data={CONF_REBOOT_BUTTON: BUTTON, CONF_WEBHOOK_ID: "test_webhook"},
     )

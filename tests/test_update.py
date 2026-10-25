@@ -1,4 +1,4 @@
-"""Tests for the Proxmox Reboot Update entity."""
+"""Tests for the Proxmox Host Monitor entity."""
 
 import asyncio
 from http import HTTPStatus
@@ -17,7 +17,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
-from custom_components.proxmox_reboot_update.const import (
+from custom_components.proxmox_host_monitor.const import (
     CONF_REBOOT_BUTTON,
     CONF_WEBHOOK_ID,
     DOMAIN,
@@ -37,9 +37,9 @@ async def entry(hass: HomeAssistant) -> MockConfigEntry:
     assert await async_setup_component(hass, "http", {})
     entry = MockConfigEntry(
         domain=DOMAIN,
-        version=2,
+        version=1,
         unique_id=DOMAIN,
-        title="Proxmox Reboot Update",
+        title="Proxmox Host Monitor",
         data={CONF_REBOOT_BUTTON: BUTTON, CONF_WEBHOOK_ID: WEBHOOK_ID},
     )
     entry.add_to_hass(hass)
@@ -98,7 +98,7 @@ async def test_restore_state(hass: HomeAssistant):
     assert await async_setup_component(hass, "http", {})
     entry = MockConfigEntry(
         domain=DOMAIN,
-        version=2,
+        version=1,
         unique_id=DOMAIN,
         data={CONF_REBOOT_BUTTON: BUTTON, CONF_WEBHOOK_ID: WEBHOOK_ID},
     )

@@ -1,0 +1,204 @@
+{
+  "title": "Proxmox Host Monitor",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Proxmox Host Monitor",
+        "description": "Select the Proxmox VE node reboot button. Proxmox Host Monitor creates its own webhook for the reboot status and the disk health reports.",
+        "data": {
+          "reboot_button": "Proxmox reboot button"
+        }
+      },
+      "import_legacy": {
+        "title": "Import Proxmox Reboot Update",
+        "description": "Proxmox Reboot Update is installed. Its configuration (reboot button `{reboot_button}`, webhook and update entity with its history) is taken over and Proxmox Reboot Update is removed afterwards. Existing host scripts keep working until they are replaced in the next step."
+      },
+      "install": {
+        "title": "Install on the Proxmox host",
+        "description": "The host needs two small scripts with systemd timers: one reports whether a reboot is required, one reports SMART and Btrfs disk health. Existing installations are detected and only replaced after you confirm.",
+        "menu_options": {
+          "ssh": "Install automatically over SSH",
+          "manual": "Show a command to paste into the Proxmox shell"
+        }
+      },
+      "ssh": {
+        "title": "Install over SSH",
+        "description": "Home Assistant connects once to install the scripts. The password is used only for this connection and is **not stored**. The host key is remembered so later updates only connect to the same host.\n\n{details}",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "confirm_replace": {
+        "title": "Existing installation found",
+        "description": "The following already exists on the host:\n\n{items}\n\n**update** = replaced by the new version, **remove** = deleted, **disable** = timer stopped and disabled, files are kept, **keep** = left unchanged.\n\nSubmit to overwrite/update, or close this dialog to change nothing."
+      },
+      "manual": {
+        "title": "Install command",
+        "description": "Run this command as root in the Proxmox shell (for example Datacenter → node → Shell):\n\n`{command}`\n\nIf something is already installed, the script lists it and asks before overwriting. Submit when it reports that Proxmox Host Monitor is installed. The first values appear within 15 minutes."
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the host over SSH.",
+      "invalid_auth": "SSH login failed. Check username and password.",
+      "host_key_mismatch": "The host key differs from the one stored at the last installation. Make sure this is the right host.",
+      "install_failed": "The installation on the host failed.",
+      "no_url": "Home Assistant has no local URL the Proxmox host could reach. Set one under Settings → System → Network."
+    },
+    "abort": {
+      "single_instance_allowed": "Proxmox Host Monitor is already configured. Use its options to reinstall the host scripts or change the reboot button.",
+      "already_configured": "Proxmox Host Monitor is already configured. Use its options to reinstall the host scripts or change the reboot button.",
+      "no_url": "Home Assistant has no local URL the Proxmox host could reach. Set one under Settings → System → Network."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Proxmox Host Monitor",
+        "menu_options": {
+          "settings": "Change the reboot button",
+          "ssh": "Install automatically over SSH",
+          "manual": "Show a command to paste into the Proxmox shell"
+        }
+      },
+      "settings": {
+        "title": "Change the reboot button",
+        "data": {
+          "reboot_button": "Proxmox reboot button"
+        }
+      },
+      "ssh": {
+        "title": "Install over SSH",
+        "description": "Home Assistant connects once to install the scripts. The password is used only for this connection and is **not stored**. The host key is remembered so later updates only connect to the same host.\n\n{details}",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "username": "Username",
+          "password": "Password"
+        }
+      },
+      "confirm_replace": {
+        "title": "Existing installation found",
+        "description": "The following already exists on the host:\n\n{items}\n\n**update** = replaced by the new version, **remove** = deleted, **disable** = timer stopped and disabled, files are kept, **keep** = left unchanged.\n\nSubmit to overwrite/update, or close this dialog to change nothing."
+      },
+      "manual": {
+        "title": "Install command",
+        "description": "Run this command as root in the Proxmox shell (for example Datacenter → node → Shell):\n\n`{command}`\n\nIf something is already installed, the script lists it and asks before overwriting. Submit when it reports that Proxmox Host Monitor is installed. The first values appear within 15 minutes."
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the host over SSH.",
+      "invalid_auth": "SSH login failed. Check username and password.",
+      "host_key_mismatch": "The host key differs from the one stored at the last installation. Make sure this is the right host.",
+      "install_failed": "The installation on the host failed.",
+      "no_url": "Home Assistant has no local URL the Proxmox host could reach. Set one under Settings → System → Network."
+    },
+    "abort": {
+      "no_url": "Home Assistant has no local URL the Proxmox host could reach. Set one under Settings → System → Network."
+    }
+  },
+  "entity": {
+    "update": {
+      "reboot_required": {
+        "name": "Reboot required",
+        "state_attributes": {
+          "installed_version": {
+            "state": {
+              "current": "Update installed"
+            }
+          },
+          "latest_version": {
+            "state": {
+              "current": "Current",
+              "reboot_required": "Reboot required"
+            }
+          },
+          "release_summary": {
+            "state": {
+              "reboot_warning": "Proxmox was updated automatically. A host reboot is required. Running virtual machines and containers are shut down in an orderly manner. The host and services running on it may be unavailable for several minutes."
+            }
+          }
+        }
+      }
+    },
+    "binary_sensor": {
+      "disk_problem": {
+        "name": "Disk problem"
+      }
+    },
+    "sensor": {
+      "disk_health": {
+        "name": "Disk health",
+        "state": {
+          "ok": "OK",
+          "warning": "Warning",
+          "critical": "Critical"
+        }
+      },
+      "health": {
+        "name": "Health",
+        "state": {
+          "ok": "OK",
+          "warning": "Warning",
+          "critical": "Critical"
+        }
+      },
+      "pending_sectors": {
+        "name": "Pending sectors"
+      },
+      "offline_uncorrectable": {
+        "name": "Offline uncorrectable sectors"
+      },
+      "reallocated_sectors": {
+        "name": "Reallocated sectors"
+      },
+      "reported_uncorrectable": {
+        "name": "Reported uncorrectable errors"
+      },
+      "btrfs_errors": {
+        "name": "Btrfs errors"
+      },
+      "media_errors": {
+        "name": "Media errors"
+      },
+      "percentage_used": {
+        "name": "Wear"
+      },
+      "crc_errors": {
+        "name": "CRC errors"
+      },
+      "command_timeouts": {
+        "name": "Command timeouts"
+      },
+      "power_on_hours": {
+        "name": "Power-on time"
+      }
+    }
+  },
+  "issues": {
+    "reboot_button_unavailable": {
+      "title": "Proxmox reboot button is no longer available",
+      "fix_flow": {
+        "step": {
+          "select_button": {
+            "title": "Select a Proxmox reboot button",
+            "description": "The configured reboot button `{entity_id}` does not exist or is no longer provided by its integration, so the Proxmox host cannot be rebooted from Home Assistant.\n\nWith the Proxmox VE integration, node reboot buttons are only created if the Proxmox user or API token has the `Sys.PowerMgmt` privilege on the node. Grant it, reload the Proxmox VE integration, and then select the reboot button below.",
+            "data": {
+              "reboot_button": "Proxmox reboot button"
+            }
+          }
+        },
+        "abort": {
+          "entry_not_found": "Proxmox Host Monitor is no longer configured."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "reboot_button_unavailable": {
+      "message": "The Proxmox reboot button {entity_id} is unavailable. Check that the Proxmox VE integration is running and that its user has the Sys.PowerMgmt privilege."
+    }
+  }
+}

@@ -1,0 +1,24 @@
+#!/bin/bash
+# Report the Proxmox host reboot status to Home Assistant (Proxmox Host Monitor).
+
+HA_WEBHOOK_URL="$(cat /etc/proxmox-host-monitor/webhook-url)"
+
+# Proxmox VE does not create /var/run/reboot-required by itself.
+# A newer installed kernel than the running one also requires a reboot.
+NEWEST_KERNEL=$(ls /boot/vmlinuz-*-pve 2>/dev/null | sed 's|/boot/vmlinuz-||' | sort -V | tail -n 1)
+
+if [ -f /var/run/reboot-required ] || { [ -n "$NEWEST_KERNEL" ] && [ "$NEWEST_KERNEL" != "$(uname -r)" ]; }; then
+    REQUIRED=true
+else
+    REQUIRED=false
+fi
+
+curl \
+    --fail \
+    --silent \
+    --show-error \
+    --max-time 10 \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d "{\"required\":${REQUIRED}}" \
+    "${HA_WEBHOOK_URL}"

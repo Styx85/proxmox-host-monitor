@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 TRANSLATIONS_DIR = Path(
-    "custom_components/proxmox_reboot_update/translations"
+    "custom_components/proxmox_host_monitor/translations"
 )
 BASE_FILE = TRANSLATIONS_DIR / "en.json"
 

@@ -1,0 +1,204 @@
+{
+  "title": "Proxmox Host Monitor",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Proxmox Host Monitor",
+        "description": "Wähle den Neustart-Button des Proxmox-VE-Nodes. Proxmox Host Monitor erstellt selbst einen Webhook für den Neustartstatus und die Festplattenberichte.",
+        "data": {
+          "reboot_button": "Proxmox-Neustart-Button"
+        }
+      },
+      "import_legacy": {
+        "title": "Proxmox Reboot Update übernehmen",
+        "description": "Proxmox Reboot Update ist installiert. Dessen Einstellungen (Neustart-Button `{reboot_button}`, Webhook und Update-Entität samt Verlauf) werden übernommen und Proxmox Reboot Update danach entfernt. Vorhandene Host-Skripte funktionieren weiter, bis sie im nächsten Schritt ersetzt werden."
+      },
+      "install": {
+        "title": "Auf dem Proxmox-Host installieren",
+        "description": "Auf dem Host werden zwei kleine Skripte mit systemd-Timern benötigt: eines meldet, ob ein Neustart nötig ist, eines meldet den SMART- und Btrfs-Zustand der Festplatten. Bestehende Installationen werden erkannt und erst nach deiner Bestätigung ersetzt.",
+        "menu_options": {
+          "ssh": "Automatisch per SSH installieren",
+          "manual": "Befehl zum Einfügen in die Proxmox-Shell anzeigen"
+        }
+      },
+      "ssh": {
+        "title": "Per SSH installieren",
+        "description": "Home Assistant verbindet sich einmalig und installiert die Skripte. Das Passwort wird nur für diese Verbindung verwendet und **nicht gespeichert**. Der Host-Schlüssel wird gemerkt, damit spätere Updates nur zu demselben Host verbinden.\n\n{details}",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "username": "Benutzername",
+          "password": "Passwort"
+        }
+      },
+      "confirm_replace": {
+        "title": "Bestehende Installation gefunden",
+        "description": "Auf dem Host gibt es bereits:\n\n{items}\n\n**update** = wird durch die neue Version ersetzt, **remove** = wird gelöscht, **disable** = Timer wird gestoppt und deaktiviert, Dateien bleiben, **keep** = bleibt unverändert.\n\nAbsenden zum Überschreiben/Aktualisieren, oder diesen Dialog schließen, um nichts zu ändern."
+      },
+      "manual": {
+        "title": "Installationsbefehl",
+        "description": "Führe diesen Befehl als root in der Proxmox-Shell aus (z. B. Rechenzentrum → Node → Shell):\n\n`{command}`\n\nIst bereits etwas installiert, listet das Skript es auf und fragt vor dem Überschreiben. Sende ab, sobald es meldet, dass Proxmox Host Monitor installiert ist. Die ersten Werte erscheinen innerhalb von 15 Minuten."
+      }
+    },
+    "error": {
+      "cannot_connect": "Keine SSH-Verbindung zum Host möglich.",
+      "invalid_auth": "SSH-Anmeldung fehlgeschlagen. Prüfe Benutzername und Passwort.",
+      "host_key_mismatch": "Der Host-Schlüssel unterscheidet sich von dem bei der letzten Installation gespeicherten. Prüfe, ob das der richtige Host ist.",
+      "install_failed": "Die Installation auf dem Host ist fehlgeschlagen.",
+      "no_url": "Home Assistant hat keine lokale URL, die der Proxmox-Host erreichen kann. Lege sie unter Einstellungen → System → Netzwerk fest."
+    },
+    "abort": {
+      "single_instance_allowed": "Proxmox Host Monitor ist bereits eingerichtet. Über die Optionen kannst du die Host-Skripte neu installieren oder den Neustart-Button ändern.",
+      "already_configured": "Proxmox Host Monitor ist bereits eingerichtet. Über die Optionen kannst du die Host-Skripte neu installieren oder den Neustart-Button ändern.",
+      "no_url": "Home Assistant hat keine lokale URL, die der Proxmox-Host erreichen kann. Lege sie unter Einstellungen → System → Netzwerk fest."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Proxmox Host Monitor",
+        "menu_options": {
+          "settings": "Neustart-Button ändern",
+          "ssh": "Automatisch per SSH installieren",
+          "manual": "Befehl zum Einfügen in die Proxmox-Shell anzeigen"
+        }
+      },
+      "settings": {
+        "title": "Neustart-Button ändern",
+        "data": {
+          "reboot_button": "Proxmox-Neustart-Button"
+        }
+      },
+      "ssh": {
+        "title": "Per SSH installieren",
+        "description": "Home Assistant verbindet sich einmalig und installiert die Skripte. Das Passwort wird nur für diese Verbindung verwendet und **nicht gespeichert**. Der Host-Schlüssel wird gemerkt, damit spätere Updates nur zu demselben Host verbinden.\n\n{details}",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "username": "Benutzername",
+          "password": "Passwort"
+        }
+      },
+      "confirm_replace": {
+        "title": "Bestehende Installation gefunden",
+        "description": "Auf dem Host gibt es bereits:\n\n{items}\n\n**update** = wird durch die neue Version ersetzt, **remove** = wird gelöscht, **disable** = Timer wird gestoppt und deaktiviert, Dateien bleiben, **keep** = bleibt unverändert.\n\nAbsenden zum Überschreiben/Aktualisieren, oder diesen Dialog schließen, um nichts zu ändern."
+      },
+      "manual": {
+        "title": "Installationsbefehl",
+        "description": "Führe diesen Befehl als root in der Proxmox-Shell aus (z. B. Rechenzentrum → Node → Shell):\n\n`{command}`\n\nIst bereits etwas installiert, listet das Skript es auf und fragt vor dem Überschreiben. Sende ab, sobald es meldet, dass Proxmox Host Monitor installiert ist. Die ersten Werte erscheinen innerhalb von 15 Minuten."
+      }
+    },
+    "error": {
+      "cannot_connect": "Keine SSH-Verbindung zum Host möglich.",
+      "invalid_auth": "SSH-Anmeldung fehlgeschlagen. Prüfe Benutzername und Passwort.",
+      "host_key_mismatch": "Der Host-Schlüssel unterscheidet sich von dem bei der letzten Installation gespeicherten. Prüfe, ob das der richtige Host ist.",
+      "install_failed": "Die Installation auf dem Host ist fehlgeschlagen.",
+      "no_url": "Home Assistant hat keine lokale URL, die der Proxmox-Host erreichen kann. Lege sie unter Einstellungen → System → Netzwerk fest."
+    },
+    "abort": {
+      "no_url": "Home Assistant hat keine lokale URL, die der Proxmox-Host erreichen kann. Lege sie unter Einstellungen → System → Netzwerk fest."
+    }
+  },
+  "entity": {
+    "update": {
+      "reboot_required": {
+        "name": "Neustart erforderlich",
+        "state_attributes": {
+          "installed_version": {
+            "state": {
+              "current": "Update installiert"
+            }
+          },
+          "latest_version": {
+            "state": {
+              "current": "Aktuell",
+              "reboot_required": "Neustart erforderlich"
+            }
+          },
+          "release_summary": {
+            "state": {
+              "reboot_warning": "Proxmox wurde automatisch aktualisiert. Ein Neustart des Hosts ist erforderlich. Laufende virtuelle Maschinen und Container werden geordnet heruntergefahren. Der Host und darauf laufende Dienste können für mehrere Minuten nicht verfügbar sein."
+            }
+          }
+        }
+      }
+    },
+    "binary_sensor": {
+      "disk_problem": {
+        "name": "Festplattenproblem"
+      }
+    },
+    "sensor": {
+      "disk_health": {
+        "name": "Festplattenzustand",
+        "state": {
+          "ok": "OK",
+          "warning": "Warnung",
+          "critical": "Kritisch"
+        }
+      },
+      "health": {
+        "name": "Zustand",
+        "state": {
+          "ok": "OK",
+          "warning": "Warnung",
+          "critical": "Kritisch"
+        }
+      },
+      "pending_sectors": {
+        "name": "Pending-Sektoren"
+      },
+      "offline_uncorrectable": {
+        "name": "Nicht korrigierbare Sektoren"
+      },
+      "reallocated_sectors": {
+        "name": "Reallozierte Sektoren"
+      },
+      "reported_uncorrectable": {
+        "name": "Gemeldete Lesefehler"
+      },
+      "btrfs_errors": {
+        "name": "Btrfs-Fehler"
+      },
+      "media_errors": {
+        "name": "Medienfehler"
+      },
+      "percentage_used": {
+        "name": "Verschleiß"
+      },
+      "crc_errors": {
+        "name": "CRC-Fehler"
+      },
+      "command_timeouts": {
+        "name": "Befehls-Timeouts"
+      },
+      "power_on_hours": {
+        "name": "Betriebszeit"
+      }
+    }
+  },
+  "issues": {
+    "reboot_button_unavailable": {
+      "title": "Proxmox-Neustart-Button ist nicht mehr verfügbar",
+      "fix_flow": {
+        "step": {
+          "select_button": {
+            "title": "Proxmox-Neustart-Button auswählen",
+            "description": "Der eingestellte Neustart-Button `{entity_id}` existiert nicht oder wird von seiner Integration nicht mehr bereitgestellt. Der Proxmox-Host kann deshalb nicht aus Home Assistant neu gestartet werden.\n\nDie Proxmox-VE-Integration legt Neustart-Buttons für Nodes nur an, wenn der Proxmox-Benutzer bzw. API-Token die Berechtigung `Sys.PowerMgmt` auf dem Node hat. Vergib sie, lade die Proxmox-VE-Integration neu und wähle anschließend unten den Neustart-Button aus.",
+            "data": {
+              "reboot_button": "Proxmox-Neustart-Button"
+            }
+          }
+        },
+        "abort": {
+          "entry_not_found": "Proxmox Host Monitor ist nicht mehr eingerichtet."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "reboot_button_unavailable": {
+      "message": "Der Proxmox-Neustart-Button {entity_id} ist nicht verfügbar. Prüfe, ob die Proxmox-VE-Integration läuft und ihr Benutzer die Berechtigung Sys.PowerMgmt hat."
+    }
+  }
+}

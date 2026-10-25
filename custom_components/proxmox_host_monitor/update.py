@@ -13,7 +13,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
 
-from . import ProxmoxRebootConfigEntry
+from . import ProxmoxHostConfigEntry
 from .button_monitor import get_reboot_button
 from .const import (
     DOMAIN,
@@ -27,7 +27,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ProxmoxRebootConfigEntry,
+    entry: ProxmoxHostConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Proxmox reboot update entity."""
@@ -51,7 +51,7 @@ class ProxmoxRebootUpdate(UpdateEntity):
     def __init__(
         self,
         hass: HomeAssistant,
-        entry: ProxmoxRebootConfigEntry,
+        entry: ProxmoxHostConfigEntry,
     ) -> None:
         """Initialize the entity."""
         self._entry = entry

@@ -1,4 +1,4 @@
-"""Fixtures for Proxmox Reboot Update tests."""
+"""Fixtures for Proxmox Host Monitor tests."""
 
 import pytest
 

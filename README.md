@@ -1,191 +1,130 @@
 <p align="center">
-  <img src="custom_components/proxmox_reboot_update/brand/icon@2x.png" alt="Proxmox Reboot Update icon" width="160">
+  <img src="custom_components/proxmox_host_monitor/brand/icon@2x.png" alt="Proxmox Host Monitor icon" width="160">
 </p>
 
-# Proxmox Reboot Update
+# Proxmox Host Monitor
 
-Home Assistant helper integration that exposes a pending Proxmox VE host reboot as a normal `update` entity.
+Home Assistant integration that watches a Proxmox VE host from the inside: pending reboots and disk health.
 
-## What it does
+It complements the core [Proxmox VE integration](https://www.home-assistant.io/integrations/proxmoxve/), which reads the Proxmox API. Proxmox Host Monitor covers what the API does not show, using two small scripts on the host that report to Home Assistant through a local webhook.
 
-- Receives reboot status directly through its own Home Assistant webhook.
+Proxmox Host Monitor replaces **Proxmox Reboot Update**. An existing installation is imported automatically, see [Migrating from Proxmox Reboot Update](#migrating-from-proxmox-reboot-update).
+
+## Features
+
+**Reboot management**
+
 - Shows a pending host reboot in Home Assistant's normal Updates UI.
-- Uses the selected Proxmox reboot button as the update action.
-- Links the update entity to the selected Proxmox device.
-- No `input_boolean` and no Home Assistant webhook automation are required.
+- Detects a newer installed kernel than the running one, and `/var/run/reboot-required`.
+- Installing the update presses the Proxmox VE reboot button and shows progress until the host reports back (at most 30 minutes).
+- A repair issue lets you select a new reboot button if the configured one disappears.
 
-## Setup
+**Disk health**
 
-Install through HACS, restart Home Assistant, then add **Proxmox Reboot Update** under **Settings → Devices & services**.
+- One device per disk (by serial number) with a problem sensor, health and the relevant SMART values: temperature, pending, reallocated and uncorrectable sectors, CRC errors, command timeouts, power-on time, NVMe wear and media errors.
+- Btrfs device error counters per disk.
+- Summary entities `Disk problem` and `Disk health` on the Proxmox node.
+- New disks appear automatically. Removed disks become unavailable and can be deleted from the device page.
+- smartd warnings are reported immediately, everything else every 15 minutes. Disks in standby are not woken up.
 
-Select the real Proxmox reboot button. The setup flow displays a generated webhook URL.
+The evaluation is deliberately strict:
 
-You can retrieve the webhook URL later by editing the existing **Proxmox Reboot Update** helper.
+| Health | Triggered by |
+|---|---|
+| critical | SMART failed, failure predicted, pending or offline uncorrectable sectors, reported uncorrectable errors, Btrfs device errors, NVMe critical warning, media errors or spare below threshold, temperature ≥ 55 °C |
+| warning | reallocated sectors, CRC errors, command timeouts, errors in the SMART error log, failed self-test, attribute below threshold in the past, NVMe wear ≥ 80 %, temperature ≥ 50 °C |
 
-## Proxmox status script
+**Setup from Home Assistant**
 
-Create the status script on the Proxmox host:
+- The host scripts are installed from the setup dialog, either automatically over SSH or with a one-line command.
+- Existing installations and similar services are detected first, and nothing is replaced without your confirmation.
 
-```bash
-nano /usr/local/sbin/report-reboot-status-to-ha
-```
+## Installation
 
-Use the following content and replace `GENERATED_ID` with the webhook URL shown by Home Assistant:
+1. In HACS, add `https://github.com/Styx85/proxmox-host-monitor` as a custom repository of type **Integration** and install **Proxmox Host Monitor**.
+2. Restart Home Assistant.
+3. Add **Proxmox Host Monitor** under **Settings → Devices & services**.
+4. Select the Proxmox VE node reboot button.
+5. Choose how to install the host scripts:
+   - **Install automatically over SSH**: enter host, user (`root`) and password. The password is used only for this connection and is **not stored**. The SSH host key is remembered, so later updates only connect to the same host.
+   - **Show a command**: run the displayed `curl … | bash` command as root in the Proxmox shell, for example **Datacenter → node → Shell** in the Proxmox web interface.
 
-```bash
-#!/bin/bash
+Both ways can be repeated later from the integration's options, for example after an update of the integration.
 
-HA_WEBHOOK_URL="http://homeassistant.example:8123/api/webhook/GENERATED_ID"
+### Proxmox VE permissions
 
-# Proxmox VE does not create /var/run/reboot-required by itself.
-# A newer installed kernel than the running one also requires a reboot.
-NEWEST_KERNEL=$(ls /boot/vmlinuz-*-pve 2>/dev/null | sed 's|/boot/vmlinuz-||' | sort -V | tail -n 1)
-
-if [ -f /var/run/reboot-required ] || { [ -n "$NEWEST_KERNEL" ] && [ "$NEWEST_KERNEL" != "$(uname -r)" ]; }; then
-    REQUIRED=true
-else
-    REQUIRED=false
-fi
-
-curl \
-    --fail \
-    --silent \
-    --show-error \
-    --max-time 10 \
-    -X POST \
-    -H "Content-Type: application/json" \
-    -d "{\"required\":${REQUIRED}}" \
-    "${HA_WEBHOOK_URL}"
-```
-
-Make the script executable:
-
-```bash
-chmod 750 /usr/local/sbin/report-reboot-status-to-ha
-```
-
-You can trigger an immediate status report with:
-
-```bash
-/usr/local/sbin/report-reboot-status-to-ha
-```
-
-## systemd service
-
-Create the systemd service:
-
-```bash
-nano /etc/systemd/system/proxmox-reboot-status.service
-```
-
-Use:
-
-```ini
-[Unit]
-Description=Report Proxmox reboot status to Home Assistant
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/report-reboot-status-to-ha
-```
-
-## systemd timer
-
-Create the timer:
-
-```bash
-nano /etc/systemd/system/proxmox-reboot-status.timer
-```
-
-Use:
-
-```ini
-[Unit]
-Description=Synchronize Proxmox reboot status with Home Assistant
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-Reload systemd and enable the timer:
-
-```bash
-systemctl daemon-reload
-systemctl enable --now proxmox-reboot-status.timer
-```
-
-Verify that the timer is active:
-
-```bash
-systemctl status proxmox-reboot-status.timer
-systemctl list-timers proxmox-reboot-status.timer
-```
-
-The Proxmox host will now report its reboot status to Home Assistant every five minutes and shortly after boot.
-
-## Behavior
-
-- The last known status is restored after a Home Assistant restart.
-- If the host has not reported for 15 minutes, the update entity becomes unavailable.
-- Installing the update presses the reboot button and shows the update as in progress until the host reports that no reboot is required anymore (at most 30 minutes).
-- The webhook only accepts requests from the local network.
-- If the selected reboot button disappears or is no longer provided by its integration, a repair issue appears under **Settings → System → Repairs**. It lets you select a new button directly.
-
-The Proxmox VE integration only creates node reboot buttons if its Proxmox user or API token has the `Sys.PowerMgmt` privilege on the node.
-
-Example for a dedicated user `ha-monitor@pve`:
+The Proxmox VE integration only creates node reboot buttons if its Proxmox user or API token has the `Sys.PowerMgmt` privilege on the node. Example for a dedicated user `ha-monitor@pve`:
 
 ```bash
 pveum role add HAMonitor -privs "Sys.Audit,VM.Audit,Datastore.Audit,Sys.PowerMgmt,VM.PowerMgmt,VM.Snapshot"
 pveum acl modify / -user ha-monitor@pve -role HAMonitor
 ```
 
-Note: an ACL on a deeper path such as `/nodes/<node>` replaces the privileges inherited from `/` for the same user. If you add a node-specific role there (for example `Sys.Modify` for the Proxmox VE package update entity), assign `HAMonitor` on that path as well.
+An ACL on a deeper path such as `/nodes/<node>` replaces the privileges inherited from `/` for the same user. If you add a node-specific role there (for example `Sys.Modify` for the Proxmox VE package update entity), assign `HAMonitor` on that path as well.
 
-## Testing
+## What is installed on the host
 
-You can test the complete status path manually.
+| Path | Purpose |
+|---|---|
+| `/usr/local/sbin/proxmox-host-monitor-reboot` | reports the reboot status |
+| `/usr/local/sbin/proxmox-host-monitor-disks` | reports SMART and Btrfs disk health (`--dry-run` prints the report) |
+| `/etc/systemd/system/proxmox-host-monitor-{reboot,disks}.{service,timer}` | every 5 and 15 minutes |
+| `/etc/smartmontools/run.d/60proxmox-host-monitor` | immediate report on smartd warnings |
+| `/etc/proxmox-host-monitor/` | webhook URL and installed version |
 
-Simulate a required reboot:
+`smartmontools` is installed if missing.
+
+### Existing installations
+
+Before changing anything, the installer looks for:
+
+| Found | Action after confirming |
+|---|---|
+| an earlier Proxmox Host Monitor | **update** |
+| the Proxmox Reboot Update status script and timer | **remove** |
+| other systemd services whose script posts to a Home Assistant webhook or calls `smartctl`, and other smartd hooks | **disable** (timer stopped and disabled, smartd hook made non-executable, files kept) |
+| cron jobs posting to a Home Assistant webhook | **keep** (only listed) |
+
+Over SSH, Home Assistant shows the list and waits for confirmation. The one-line command asks `Overwrite/update? [y/N]` in the terminal. `--check` only lists, `--yes` skips the question.
+
+### Uninstall
 
 ```bash
-touch /var/run/reboot-required
-/usr/local/sbin/report-reboot-status-to-ha
+systemctl disable --now proxmox-host-monitor-reboot.timer proxmox-host-monitor-disks.timer
+rm -rf /usr/local/sbin/proxmox-host-monitor-* /etc/systemd/system/proxmox-host-monitor-* \
+       /etc/smartmontools/run.d/60proxmox-host-monitor /etc/proxmox-host-monitor
+systemctl daemon-reload
 ```
 
-Home Assistant should now show the Proxmox reboot as pending in the normal Updates UI.
+## Migrating from Proxmox Reboot Update
 
-Reset the state:
+1. Install Proxmox Host Monitor and add it as described above. Keep Proxmox Reboot Update installed for now.
+2. The setup detects Proxmox Reboot Update and takes over its reboot button, its webhook and its update entity, including entity ID and history. Proxmox Reboot Update's configuration is removed afterwards.
+3. Install the host scripts. The installer replaces the old `report-reboot-status-to-ha` script and timer after you confirm.
+4. Uninstall Proxmox Reboot Update in HACS.
 
-```bash
-rm /var/run/reboot-required
-/usr/local/sbin/report-reboot-status-to-ha
+## Webhook payload
+
+Custom scripts can report to the same webhook (`POST`, JSON, local network only). Both keys are optional, but at least one is required:
+
+```json
+{
+  "required": false,
+  "disks": [
+    {
+      "name": "sda",
+      "serial": "WW6099YV",
+      "model": "ST4000VX016",
+      "status": "ok",
+      "temperature": 37,
+      "pending_sectors": 0,
+      "problems": [{"code": "pending_sectors", "severity": "critical", "value": 3}]
+    }
+  ]
+}
 ```
 
-The pending update should disappear again.
-
-## Upgrading from versions before 1.1.1
-
-Versions before 1.1.1 did not expose the webhook configuration correctly through the Home Assistant helper UI.
-
-After upgrading to 1.1.1 or later:
-
-1. Open **Settings → Devices & services → Helpers**.
-2. Open the existing **Proxmox Reboot Update** helper and choose **Edit**.
-3. Copy the displayed webhook URL.
-4. Replace the old webhook URL in `/usr/local/sbin/report-reboot-status-to-ha`.
-5. Run the status script once and verify that the update entity becomes available.
-
-Do **not** try to add Proxmox Reboot Update a second time. Only one instance is supported. On older versions this could result in the message `single_instance_allowed`.
-
-If upgrading from 1.0.x, the previous `input_boolean` and Home Assistant webhook automation can be removed after the new integrated webhook has been tested successfully.
+`status` is `ok`, `warning` or `critical`. Each disk report replaces the previous one; disks missing from it become unavailable. Without a report for 15 minutes (reboot) or 45 minutes (disks) the entities become unavailable.
 
 ## Translations
 
@@ -193,10 +132,10 @@ English (`en.json`) is the reference translation. German is maintained with the 
 
 To add a translation:
 
-1. Copy `custom_components/proxmox_reboot_update/translations/en.json`.
+1. Copy `custom_components/proxmox_host_monitor/translations/en.json`.
 2. Rename the copy using the appropriate Home Assistant language code, for example `fr.json`, `nl.json`, or `es.json`.
 3. Translate text values only. Do not change JSON keys.
-4. Preserve placeholders such as `{webhook_url}` exactly.
+4. Preserve placeholders such as `{command}` exactly.
 5. Run:
 
    ```bash
@@ -217,7 +156,7 @@ Home Assistant's central translation platform is not available for custom integr
 
 ## Development
 
-This project was created with the help of ChatGPT by OpenAI, including assistance with architecture, implementation, documentation, and debugging.
+This project was created with the help of ChatGPT by OpenAI and Claude by Anthropic, including assistance with architecture, implementation, documentation, and debugging.
 
 Final testing, review, and publication were performed by the repository maintainer.
 
