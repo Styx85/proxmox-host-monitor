@@ -104,7 +104,23 @@ def disk_info(data):
     return {key: value for key, value in info.items() if value is not None}
 
 
-def check_disk(dev):
+def self_test_completions():
+    """Return when smartd last saw a self-test complete, per disk name.
+
+    Some old disks count the hours in their self-test log differently from
+    their power-on hours, so the wall clock of smartd's log is more reliable.
+    """
+    log = run("journalctl", "-u", "smartmontools", "-u", "smartd", "--since", "-60d",
+              "-o", "short-unix", "--no-pager", "--grep", "self-test completed").stdout
+    completions = {}
+    for stamp, name in re.findall(
+        r"^(\d+)(?:\.\d+)? .*Device:? /dev/(\w+).*self-test completed", log, re.M
+    ):
+        completions[name] = int(stamp)
+    return completions
+
+
+def check_disk(dev, completions=None):
     data, rc = smartctl("-a", "-n", "standby", "-d", dev["type"], dev["name"])
     # A disk in standby is skipped instead of being woken up.
     if rc & 2 and not data.get("smart_status"):
@@ -160,6 +176,13 @@ def check_disk(dev):
             problem("available_spare", "critical", nvme["available_spare"])
         if nvme["percentage_used"] >= 80:
             problem("percentage_used", "warning", nvme["percentage_used"])
+
+    completed = (completions or {}).get(disk["name"])
+    if completed is not None and "self_test" in disk:
+        hours = int((time.time() - completed) / 3600)
+        current = disk["self_test"].get("hours_ago")
+        if current is None or current < 0 or hours < current:
+            disk["self_test"]["hours_ago"] = hours
 
     if disk.get("self_test_supported"):
         hours_ago = disk.get("self_test", {}).get("hours_ago")
@@ -641,7 +664,10 @@ def post(payload):
 
 def main():
     scan, _ = smartctl("--scan-open")
-    disks = [d for d in (check_disk(dev) for dev in scan.get("devices", [])) if d]
+    completions = self_test_completions()
+    disks = [
+        d for d in (check_disk(dev, completions) for dev in scan.get("devices", [])) if d
+    ]
 
     mounts = btrfs_mounts()
     errors = btrfs_errors(mounts)
