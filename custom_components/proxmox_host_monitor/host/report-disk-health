@@ -298,7 +298,12 @@ def btrfs_pools(mounts, serials):
             kinds.setdefault(kind.lower(), []).append(profile)
 
         usage = run("btrfs", "filesystem", "usage", "--raw", mount).stdout
-        free = re.search(r"Free \(estimated\):\s+(\d+)", usage)
+        # Btrfs' estimate ignores that a mirror is limited by its smaller disk;
+        # the statfs value respects it, so the smaller of both is reported.
+        free_values = [
+            int(value) for value in re.findall(
+                r"Free \((?:estimated|statfs, df)\):\s+(\d+)", usage)
+        ]
         size = sum(device["size"] for device in devices)
         balance = run("btrfs", "balance", "status", mount).stdout
 
@@ -312,7 +317,7 @@ def btrfs_pools(mounts, serials):
             "label": label.group(1) if label and label.group(1) != "none" else "",
             "size": size,
             "used": sum(profiles.values()),
-            "free": int(free.group(1)) if free else None,
+            "free": min(free_values) if free_values else None,
             "profiles": kinds,
             "balance_running": "is running" in balance or "is paused" in balance,
             "balance_progress": balance_progress(balance),

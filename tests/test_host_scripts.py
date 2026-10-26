@@ -192,3 +192,20 @@ async def test_self_test_age_from_smartd_log():
     disk = m.check_disk({"name": "/dev/sdd", "type": "sat"}, completions)
     assert disk["self_test"]["hours_ago"] == 5
     assert disk["problems"] == []
+
+
+async def test_pool_free_space_uses_smaller_estimate():
+    """A mirror of unequal disks reports the free space statfs sees."""
+    calls = []
+    m.run = fake({
+        "btrfs filesystem show": "Label: 'ssd'  uuid: u\n"
+            "\tdevid    1 size 120034123776 used 1 path /dev/sdd\n"
+            "\tdevid    2 size 240057409536 used 1 path /dev/sde\n",
+        "btrfs filesystem df": "Data, RAID1: total=1, used=40000000000\n",
+        "btrfs filesystem usage": "    Free (estimated):\t\t138935959552\t(min: 138935959552)\n"
+            "    Free (statfs, df):\t\t78923243520\n",
+        "btrfs balance status": "No balance found",
+        "btrfs scrub status": "no stats available",
+    }, calls)
+    pool = m.btrfs_pools({"u": "/mnt/ssd"}, {})[0]
+    assert pool["free"] == 78923243520
