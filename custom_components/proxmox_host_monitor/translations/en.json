@@ -121,6 +121,9 @@
             }
           }
         }
+      },
+      "guest_update": {
+        "name": "Update"
       }
     },
     "binary_sensor": {
@@ -396,11 +399,37 @@
     "host_unattended_upgrades_failed": {
       "title": "Automatic updates failed",
       "description": "The last run of unattended-upgrades on the Proxmox host failed. Check `/var/log/unattended-upgrades/`."
+    },
+    "guest_update_failed": {
+      "title": "Update of container {guest} failed",
+      "fix_flow": {
+        "step": {
+          "confirm_rollback": {
+            "title": "Roll {guest} back to {snapshot}?",
+            "description": "The update of container **{guest}** (CT {vmid}) failed: {error}\n\nThe snapshot `{snapshot}` was taken right before the update. Rolling back restores the container to that state and starts it again; everything changed in the container since then is lost. Data on bind mounts is not part of the snapshot and stays as it is.\n\nThe host picks up the request within 5 minutes. The full log is in `/var/log/proxmox-host-monitor/guest-{vmid}.log` on the Proxmox host."
+          }
+        },
+        "abort": {
+          "entry_not_found": "Proxmox Host Monitor is no longer configured.",
+          "guest_not_found": "The container is no longer reported by the host.",
+          "guest_update_running": "An update or rollback of the container is already running."
+        }
+      }
+    },
+    "guest_update_failed_no_snapshot": {
+      "title": "Update of container {guest} failed",
+      "description": "The update of container **{guest}** (CT {vmid}) failed before anything was changed: {error}\n\nThe full log is in `/var/log/proxmox-host-monitor/guest-{vmid}.log` on the Proxmox host."
     }
   },
   "exceptions": {
     "reboot_button_unavailable": {
       "message": "The Proxmox reboot button {entity_id} is unavailable. Check that the Proxmox VE integration is running and that its user has the Sys.PowerMgmt privilege."
+    },
+    "guest_unavailable": {
+      "message": "Container {guest} is not running or was not reported by the Proxmox host recently."
+    },
+    "guest_update_running": {
+      "message": "An update or rollback of container {guest} is already running."
     }
   }
 }

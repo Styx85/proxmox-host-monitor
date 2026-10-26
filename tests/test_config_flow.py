@@ -204,7 +204,7 @@ def test_install_script() -> None:
     script = build_install_script("http://ha:8123/api/webhook/abc", "2.0.0")
     assert "WEBHOOK_URL=http://ha:8123/api/webhook/abc" in script
     assert 'VERSION="2.0.0"' in script
-    for marker in ("@VERSION@", "@WEBHOOK_URL@", "@REBOOT_SCRIPT@", "@DISK_SCRIPT@"):
+    for marker in ("@VERSION@", "@WEBHOOK_URL@", "@REBOOT_SCRIPT@", "@DISK_SCRIPT@", "@GUEST_SCRIPT@"):
         assert marker not in script
     assert "smartctl" in script
     assert "uname -r" in script

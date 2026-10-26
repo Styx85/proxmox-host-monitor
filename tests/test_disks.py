@@ -218,6 +218,7 @@ async def test_combined_report(hass, entry, hass_client_no_auth):
         "ok": True,
         "required": True,
         "pending_commands": False,
+        "pending_guest_commands": False,
         "disks": 1,
     }
 

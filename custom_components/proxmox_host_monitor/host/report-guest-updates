@@ -1,0 +1,431 @@
+#!/usr/bin/python3 -I
+"""Report and install updates of the LXC containers (Proxmox Host Monitor).
+
+Without arguments the script reports the update state of every running
+container: pending packages and, for containers installed with the Proxmox VE
+community scripts, the installed and the latest app version. Home Assistant
+answers with queued commands, which run as transient systemd units:
+
+    --update VMID ID              snapshot, upgrade packages, update the app
+    --rollback VMID SNAPSHOT ID   roll back to the snapshot and start again
+"""
+
+from datetime import datetime, timezone
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+WEBHOOK_URL_FILE = "/etc/proxmox-host-monitor/webhook-url"
+GITHUB_TOKEN_FILE = "/etc/proxmox-host-monitor/github-token"
+STATE_DIR = "/var/lib/proxmox-host-monitor/guests"
+LOG_DIR = "/var/log/proxmox-host-monitor"
+SELF = "/usr/local/sbin/proxmox-host-monitor-guests"
+UNIT = "proxmox-host-monitor-guest-"
+SNAPSHOT_PREFIX = "phm_"
+
+# Only update entrypoints of the community scripts are followed.
+COMMUNITY_URL = re.compile(r"https://raw\.githubusercontent\.com/community-scripts/[\w.-]+/[\w.-]+")
+SCRIPT_NAME = re.compile(r"[\w.-]+")
+REPO = re.compile(r"[\w.-]+/[\w.-]+")
+COMMAND_ID = re.compile(r"[0-9a-f]{8,64}")
+
+APT_TIMEOUT = 3600
+APP_TIMEOUT = 3 * 3600
+
+ENV = ("env", "DEBIAN_FRONTEND=noninteractive", "TERM=dumb", "PHS_SILENT=1")
+APT_OPTIONS = (
+    "-o", "Dpkg::Options::=--force-confdef",
+    "-o", "Dpkg::Options::=--force-confold",
+)
+
+
+def run(*args, timeout=120):
+    try:
+        return subprocess.run(
+            args, capture_output=True, text=True, check=False,
+            stdin=subprocess.DEVNULL, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as err:
+        return subprocess.CompletedProcess(args, 124, err.stdout or "", f"timeout after {timeout} s")
+
+
+def pct_exec(vmid, *command, timeout=120):
+    return run("pct", "exec", str(vmid), "--", *command, timeout=timeout)
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def containers():
+    """Return the containers of this node as dicts with vmid, name and status."""
+    result = []
+    for line in run("pct", "list").stdout.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 2 or not fields[0].isdigit():
+            continue
+        # The lock column is empty for most containers.
+        result.append({"vmid": int(fields[0]), "status": fields[1], "name": fields[-1]})
+    return result
+
+
+def os_name(vmid):
+    release = pct_exec(vmid, "cat", "/etc/os-release").stdout
+    match = re.search(r'^PRETTY_NAME="?([^"\n]*)"?', release, re.M)
+    return match.group(1) if match else None
+
+
+def pending_packages(vmid):
+    """Return the packages a dist-upgrade would install or upgrade."""
+    result = pct_exec(
+        vmid, "apt-get", "-s", "-o", "Debug::NoLocking=1", "dist-upgrade", timeout=300
+    )
+    if result.returncode != 0:
+        return None
+    packages = []
+    for match in re.finditer(r"^Inst (\S+) (?:\[(\S+)\] )?\((\S+)", result.stdout, re.M):
+        packages.append(
+            {"name": match.group(1), "installed": match.group(2), "version": match.group(3)}
+        )
+    return packages
+
+
+def fetch(url, headers=None):
+    request = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return response.read().decode()
+
+
+def resolve(value, script):
+    """Replace $NAME and ${NAME} with a plain assignment from the script."""
+    def lookup(match):
+        name = match.group(1) or match.group(2)
+        assignment = re.search(
+            rf'^\s*(?:local\s+|export\s+)?{name}=["\']?([^"\'\s$]+)["\']?\s*$', script, re.M
+        )
+        if assignment is None:
+            raise ValueError(name)
+        return assignment.group(1)
+
+    return re.sub(r"\$\{(\w+)\}|\$(\w+)", lookup, value)
+
+
+def release_check(script):
+    """Return (app, repo, pinned) of the first check_for_gh_release call.
+
+    A tag prefix filter or a version that cannot be resolved returns None.
+    """
+    match = re.search(r"check_for_gh_release\s+([^;\n]+)", script)
+    if match is None:
+        return None
+    try:
+        args = [resolve(arg, script) for arg in shlex.split(match.group(1))]
+    except ValueError:
+        return None
+    args = [arg for arg in args if arg not in ("then", "&&", "||")]
+    if len(args) < 2 or not REPO.fullmatch(args[1]) or len(args) > 4:
+        return None
+    pinned = args[2] if len(args) > 2 and args[2] not in ("", "latest") else None
+    return args[0], args[1], pinned
+
+
+class Releases:
+    """Latest GitHub releases and community scripts, fetched once per run."""
+
+    def __init__(self):
+        self.scripts = {}
+        self.releases = {}
+        token = None
+        try:
+            with open(GITHUB_TOKEN_FILE, encoding="utf-8") as file:
+                token = file.read().strip()
+        except OSError:
+            pass
+        self.headers = {"Accept": "application/vnd.github+json"}
+        if token:
+            self.headers["Authorization"] = f"Bearer {token}"
+
+    def script(self, base, name):
+        url = f"{base}/ct/{name}.sh"
+        if url not in self.scripts:
+            try:
+                self.scripts[url] = fetch(url)
+            except (OSError, urllib.error.URLError):
+                self.scripts[url] = None
+        return self.scripts[url]
+
+    def latest(self, repo, pinned):
+        key = (repo, pinned)
+        if key not in self.releases:
+            path = f"releases/tags/{pinned}" if pinned else "releases/latest"
+            try:
+                data = json.loads(fetch(f"https://api.github.com/repos/{repo}/{path}", self.headers))
+                self.releases[key] = (data["tag_name"], data.get("html_url"))
+            except (OSError, urllib.error.URLError, ValueError, KeyError):
+                self.releases[key] = None
+        return self.releases[key]
+
+
+def version(tag):
+    return tag[1:] if re.match(r"v\d", tag or "") else tag
+
+
+def app_info(vmid, releases):
+    """Return the app of a community-scripts container, or None."""
+    entrypoint = pct_exec(vmid, "cat", "/usr/bin/update").stdout
+    name = re.search(r'^export UPDATE_SCRIPT_NAME="([^"]*)"', entrypoint, re.M)
+    base = re.search(r'^export COMMUNITY_SCRIPTS_URL="([^"]*)"', entrypoint, re.M)
+    if not name or not base:
+        return None
+    name, base = name.group(1), base.group(1).rstrip("/")
+    if not SCRIPT_NAME.fullmatch(name) or not COMMUNITY_URL.fullmatch(base):
+        return None
+
+    info = {"script": name}
+    script = releases.script(base, name)
+    check = release_check(script) if script else None
+    if check is None:
+        # Apps from a package repository update with the packages.
+        return info
+    app, repo, pinned = check
+    info["app"] = app
+    installed = pct_exec(vmid, "cat", f"/root/.{app.lower().replace(' ', '')}")
+    if installed.returncode == 0 and installed.stdout.strip():
+        info["installed"] = version(installed.stdout.strip())
+    if latest := releases.latest(repo, pinned):
+        info["latest"] = version(latest[0])
+        info["release_url"] = latest[1]
+    return info
+
+
+def state_file(vmid):
+    return os.path.join(STATE_DIR, f"{vmid}.json")
+
+
+def load_state(vmid):
+    try:
+        with open(state_file(vmid), encoding="utf-8") as file:
+            return json.load(file)
+    except (OSError, ValueError):
+        return None
+
+
+def save_state(vmid, state):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    path = state_file(vmid)
+    with open(f"{path}.tmp", "w", encoding="utf-8") as file:
+        json.dump(state, file)
+    os.replace(f"{path}.tmp", path)
+
+
+def unit_active(vmid):
+    return run("systemctl", "is-active", "--quiet", f"{UNIT}{vmid}.service").returncode == 0
+
+
+def last_action(vmid):
+    """Return the latest update or rollback of a container."""
+    state = load_state(vmid)
+    if state and state.get("state") == "running" and not unit_active(vmid):
+        # The host restarted or the unit was killed during the update.
+        state.update(state="failed", error="interrupted", finished=now())
+        save_state(vmid, state)
+    return state
+
+
+def guest_report(releases):
+    guests = []
+    for ct in containers():
+        guest = {"vmid": ct["vmid"], "name": ct["name"], "status": ct["status"]}
+        if ct["status"] == "running":
+            guest["os"] = os_name(ct["vmid"])
+            packages = pending_packages(ct["vmid"])
+            if packages is not None:
+                guest["packages"] = packages
+            if app := app_info(ct["vmid"], releases):
+                guest["app"] = app
+        if action := last_action(ct["vmid"]):
+            guest["last_action"] = action
+        guests.append(guest)
+    return guests
+
+
+def post(payload):
+    with open(WEBHOOK_URL_FILE, encoding="utf-8") as file:
+        url = file.read().strip()
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    return json.loads(urllib.request.urlopen(request, timeout=30).read().decode() or "{}")
+
+
+def execute(command, guests):
+    """Start an update or rollback requested from Home Assistant."""
+    action = command.get("action")
+    if action not in ("guest_update", "guest_rollback"):
+        return f"unknown action {action}"
+    vmid = command.get("vmid")
+    guest = next((g for g in guests if g["vmid"] == vmid), None)
+    if not isinstance(vmid, int) or guest is None:
+        return "container not found"
+    command_id = str(command.get("id", ""))
+    if not COMMAND_ID.fullmatch(command_id):
+        return "invalid id"
+    if unit_active(vmid):
+        return "another update is running"
+
+    if action == "guest_update":
+        if guest["status"] != "running":
+            return "container is not running"
+        args = ["--update", str(vmid), command_id]
+        description = f"update CT {vmid}"
+    else:
+        snapshot = str(command.get("snapshot", ""))
+        if not re.fullmatch(rf"{SNAPSHOT_PREFIX}\w+", snapshot):
+            return "invalid snapshot"
+        args = ["--rollback", str(vmid), snapshot, command_id]
+        description = f"roll back CT {vmid} to {snapshot}"
+
+    unit = f"{UNIT}{vmid}"
+    run("systemctl", "reset-failed", f"{unit}.service")
+    result = run(
+        "systemd-run", f"--unit={unit}",
+        f"--description=Proxmox Host Monitor: {description}",
+        SELF, *args,
+    )
+    return "started" if result.returncode == 0 else result.stderr.strip()
+
+
+def report():
+    guests = guest_report(Releases())
+    if "--dry-run" in sys.argv:
+        print(json.dumps(guests, indent=1))
+        return
+    response = post({"guests": guests})
+    print(json.dumps(response))
+
+    results = [
+        {**command, "result": execute(command, guests)}
+        for command in response.get("guest_commands", [])
+    ]
+    if results:
+        print(json.dumps(results))
+        # Report the started update right away.
+        post({"guests": guest_report(Releases()), "command_results": results})
+
+
+class Log:
+    """Full output of an update in /var/log, the tail goes to Home Assistant."""
+
+    def __init__(self, vmid):
+        os.makedirs(LOG_DIR, exist_ok=True)
+        self.file = open(os.path.join(LOG_DIR, f"guest-{vmid}.log"), "w", encoding="utf-8")
+
+    def step(self, title, result):
+        self.file.write(f"### {title} (exit {result.returncode})\n{result.stdout}{result.stderr}\n")
+        self.file.flush()
+        print(f"{title}: exit {result.returncode}")
+        return result.returncode == 0
+
+    @staticmethod
+    def tail(result, lines=5):
+        text = (result.stderr.strip() or result.stdout.strip()).splitlines()
+        # The community scripts print colour codes even without a terminal.
+        return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", "\n".join(text[-lines:]))
+
+
+def snapshots(vmid):
+    output = run("pct", "listsnapshot", str(vmid)).stdout
+    return re.findall(rf"({SNAPSHOT_PREFIX}\w+)", output)
+
+
+def update(vmid, command_id):
+    """Snapshot the container, upgrade its packages and update its app."""
+    releases = Releases()
+    before = app_info(vmid, releases) or {}
+    snapshot = f"{SNAPSHOT_PREFIX}{datetime.now():%Y%m%d_%H%M%S}"
+    state = {
+        "id": command_id, "action": "update", "state": "running", "started": now(),
+        "snapshot": None, "from": before.get("installed"), "to": None,
+    }
+    save_state(vmid, state)
+    log = Log(vmid)
+
+    def fail(error):
+        state.update(state="failed", error=error, finished=now())
+        save_state(vmid, state)
+
+    result = run(
+        "pct", "snapshot", str(vmid), snapshot,
+        "--description", "Proxmox Host Monitor: before update", timeout=600,
+    )
+    if not log.step("snapshot", result):
+        return fail(f"snapshot failed: {Log.tail(result, 2)}")
+    state["snapshot"] = snapshot
+    save_state(vmid, state)
+
+    if pct_exec(vmid, "sh", "-c", "command -v apt-get").returncode == 0:
+        result = pct_exec(vmid, *ENV, "apt-get", "update", "-q", timeout=APT_TIMEOUT)
+        if not log.step("apt-get update", result):
+            return fail(f"apt-get update failed: {Log.tail(result)}")
+        result = pct_exec(
+            vmid, *ENV, "apt-get", "dist-upgrade", "-y", "-q", *APT_OPTIONS, timeout=APT_TIMEOUT
+        )
+        if not log.step("apt-get dist-upgrade", result):
+            return fail(f"apt-get dist-upgrade failed: {Log.tail(result)}")
+
+    if before.get("latest") and before.get("installed") != before["latest"]:
+        result = pct_exec(vmid, *ENV, "bash", "/usr/bin/update", timeout=APP_TIMEOUT)
+        log.step("community-scripts update", result)
+        after = app_info(vmid, releases) or {}
+        state["to"] = after.get("installed")
+        if after.get("installed") != before["latest"]:
+            return fail(
+                f"{before.get('app')} is still {after.get('installed')}, "
+                f"expected {before['latest']}: {Log.tail(result)}"
+            )
+
+    # Keep only the snapshot of this update, older ones grow the thin pool.
+    for old in snapshots(vmid):
+        if old != snapshot:
+            log.step(f"delete snapshot {old}", run("pct", "delsnapshot", str(vmid), old, timeout=600))
+    state.update(state="done", finished=now(), error=None)
+    save_state(vmid, state)
+
+
+def rollback(vmid, snapshot, command_id):
+    state = {
+        "id": command_id, "action": "rollback", "state": "running", "started": now(),
+        "snapshot": snapshot,
+    }
+    save_state(vmid, state)
+    log = Log(vmid)
+    result = run("pct", "rollback", str(vmid), snapshot, "--start", "1", timeout=1800)
+    if log.step(f"rollback {snapshot}", result):
+        state.update(state="done", finished=now(), error=None)
+    else:
+        state.update(state="failed", finished=now(), error=Log.tail(result, 3))
+    save_state(vmid, state)
+
+
+def main():
+    if len(sys.argv) >= 4 and sys.argv[1] == "--update":
+        update(int(sys.argv[2]), sys.argv[3])
+    elif len(sys.argv) >= 5 and sys.argv[1] == "--rollback":
+        rollback(int(sys.argv[2]), sys.argv[3], sys.argv[4])
+    else:
+        report()
+        return
+    # Tell Home Assistant the result right away.
+    report()
+
+
+if __name__ == "__main__":
+    main()

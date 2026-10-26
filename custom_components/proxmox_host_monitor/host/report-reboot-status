@@ -24,9 +24,13 @@ RESPONSE=$(curl \
     "${HA_WEBHOOK_URL}")
 echo "$RESPONSE"
 
-# Home Assistant queued a command (for example a disk removal); the disk
-# health report picks it up.
+# Home Assistant queued a command (for example a disk removal or a container
+# update); the disk health or guest report picks it up.
 case "$RESPONSE" in
     *'"pending_commands": true'*)
         systemctl start --no-block proxmox-host-monitor-disks.service ;;
+esac
+case "$RESPONSE" in
+    *'"pending_guest_commands": true'*)
+        systemctl start --no-block proxmox-host-monitor-guests.service ;;
 esac

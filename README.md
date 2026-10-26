@@ -19,6 +19,13 @@ Proxmox Host Monitor replaces **Proxmox Reboot Update**. An existing installatio
 - Installing the update presses the Proxmox VE reboot button and shows progress until the host reports back (at most 30 minutes).
 - A repair issue lets you select a new reboot button if the configured one disappears.
 
+**Container updates**
+
+- One update entity per LXC container: pending packages (`apt-get dist-upgrade`, including third-party repositories) and, for containers installed with the [Proxmox VE community scripts](https://community-scripts.org), the installed and the latest app version. The latest version is the one the community script would install, so pinned versions (for example Immich) are respected.
+- Installing takes a snapshot of the container (`phm_<date>`), upgrades the packages and runs the community scripts' `update` without questions. The previous update's snapshot is deleted afterwards, the new one is kept.
+- A failed update raises a repair issue that rolls the container back to the snapshot. Bind mounts are not part of the snapshot.
+- Checked every 6 hours; the host picks up an install within 5 minutes. Stopped containers are unavailable. Virtual machines are not covered.
+
 **Disk health**
 
 - One device per disk (by serial number) with a problem sensor, health and the relevant SMART values: temperature, pending, reallocated and uncorrectable sectors, CRC errors, command timeouts, power-on time, NVMe wear and media errors.
@@ -114,6 +121,8 @@ The integration fires `proxmox_host_monitor_alert` once per situation:
 | `removal_requested`, `removal_started`, `removal_finished` | `disk`, `serial`, `pool` |
 | `removal_failed` | `disk`, `serial`, `reason` |
 | `host_problem` | `code`, `item`, `value`, `severity` |
+| `guest_update_finished`, `guest_update_failed` | `guest`, `vmid`, `version_from`, `version_to`, `snapshot`, `error` |
+| `guest_rollback_requested`, `guest_rollback_finished`, `guest_rollback_failed` | `guest`, `vmid`, `snapshot`, `error` |
 | `scrub_finished` | `pool`, `result` (`ok`, `repaired`, `uncorrectable`, `aborted`), `status`, `duration`, `errors`, `corrected`, `uncorrectable` |
 
 Example automation for a push notification:
@@ -152,11 +161,12 @@ Fans and mainboard temperatures come from the Super I/O chip, which needs a kern
 |---|---|
 | `/usr/local/sbin/proxmox-host-monitor-reboot` | reports the reboot status |
 | `/usr/local/sbin/proxmox-host-monitor-disks` | reports SMART and Btrfs disk health and filesystems, runs confirmed disk removals (`--dry-run` prints the report) |
-| `/etc/systemd/system/proxmox-host-monitor-{reboot,disks}.{service,timer}` | every 5 and 15 minutes |
+| `/usr/local/sbin/proxmox-host-monitor-guests` | reports container updates, runs confirmed updates and rollbacks (`--dry-run` prints the report) |
+| `/etc/systemd/system/proxmox-host-monitor-{reboot,disks,guests}.{service,timer}` | every 5 minutes, 15 minutes and 6 hours |
 | `/etc/smartmontools/run.d/60proxmox-host-monitor` | immediate report on smartd warnings |
 | `/etc/proxmox-host-monitor/` | webhook URL and installed version |
 
-`smartmontools` is installed if missing. Disk removals run as transient units `proxmox-host-monitor-remove-<serial>`.
+`smartmontools` is installed if missing. Disk removals run as transient units `proxmox-host-monitor-remove-<serial>`, container updates and rollbacks as `proxmox-host-monitor-guest-<vmid>` with their log in `/var/log/proxmox-host-monitor/guest-<vmid>.log`. GitHub allows 60 unauthenticated API requests per hour; with many apps put a token into `/etc/proxmox-host-monitor/github-token`.
 
 ### Existing installations
 
@@ -189,7 +199,7 @@ systemctl daemon-reload
 
 ## Webhook payload
 
-Custom scripts can report to the same webhook (`POST`, JSON, local network only). All keys are optional, but `required` or `disks` is required:
+Custom scripts can report to the same webhook (`POST`, JSON, local network only). All keys are optional, but `required`, `disks` or `guests` is required:
 
 ```json
 {
@@ -208,7 +218,7 @@ Custom scripts can report to the same webhook (`POST`, JSON, local network only)
 }
 ```
 
-`status` is `ok`, `warning` or `critical`. `pools` describes Btrfs filesystems, see `report-disk-health` for the format. The response to a disk report can contain `commands` for the host. Each disk report replaces the previous one; disks missing from it become unavailable. Without a report for 15 minutes (reboot) or 45 minutes (disks) the entities become unavailable.
+`status` is `ok`, `warning` or `critical`. `pools` describes Btrfs filesystems, see `report-disk-health` for the format. The response to a disk report can contain `commands` for the host. Each disk report replaces the previous one; disks missing from it become unavailable. Without a report for 15 minutes (reboot) or 45 minutes (disks) the entities become unavailable. `guests` lists containers, see `report-guest-updates` for the format; its response can contain `guest_commands`, and the containers become unavailable after 13 hours without a report.
 
 ## Translations
 

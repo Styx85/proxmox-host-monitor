@@ -121,6 +121,9 @@
             }
           }
         }
+      },
+      "guest_update": {
+        "name": "Update"
       }
     },
     "binary_sensor": {
@@ -396,11 +399,37 @@
     "host_unattended_upgrades_failed": {
       "title": "Automatische Updates fehlgeschlagen",
       "description": "Der letzte Lauf von unattended-upgrades auf dem Proxmox-Host ist fehlgeschlagen. Prüfe `/var/log/unattended-upgrades/`."
+    },
+    "guest_update_failed": {
+      "title": "Update von Container {guest} fehlgeschlagen",
+      "fix_flow": {
+        "step": {
+          "confirm_rollback": {
+            "title": "{guest} auf {snapshot} zurücksetzen?",
+            "description": "Das Update von Container **{guest}** (CT {vmid}) ist fehlgeschlagen: {error}\n\nDer Snapshot `{snapshot}` wurde direkt vor dem Update angelegt. Beim Zurücksetzen bekommt der Container genau diesen Stand und startet neu; alles, was sich seitdem im Container geändert hat, geht verloren. Daten auf Bind-Mounts gehören nicht zum Snapshot und bleiben unverändert.\n\nDer Host holt den Auftrag innerhalb von 5 Minuten ab. Das vollständige Protokoll liegt auf dem Proxmox-Host in `/var/log/proxmox-host-monitor/guest-{vmid}.log`."
+          }
+        },
+        "abort": {
+          "entry_not_found": "Proxmox Host Monitor ist nicht mehr eingerichtet.",
+          "guest_not_found": "Der Container wird vom Host nicht mehr gemeldet.",
+          "guest_update_running": "Ein Update oder Zurücksetzen des Containers läuft bereits."
+        }
+      }
+    },
+    "guest_update_failed_no_snapshot": {
+      "title": "Update von Container {guest} fehlgeschlagen",
+      "description": "Das Update von Container **{guest}** (CT {vmid}) ist fehlgeschlagen, bevor etwas geändert wurde: {error}\n\nDas vollständige Protokoll liegt auf dem Proxmox-Host in `/var/log/proxmox-host-monitor/guest-{vmid}.log`."
     }
   },
   "exceptions": {
     "reboot_button_unavailable": {
       "message": "Der Proxmox-Neustart-Button {entity_id} ist nicht verfügbar. Prüfe, ob die Proxmox-VE-Integration läuft und ihr Benutzer die Berechtigung Sys.PowerMgmt hat."
+    },
+    "guest_unavailable": {
+      "message": "Container {guest} läuft nicht oder wurde vom Proxmox-Host länger nicht gemeldet."
+    },
+    "guest_update_running": {
+      "message": "Ein Update oder Zurücksetzen von Container {guest} läuft bereits."
     }
   }
 }
