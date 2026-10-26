@@ -33,6 +33,7 @@ def build_install_script(webhook_url: str, version: str) -> str:
         "@WEBHOOK_URL@": shlex.quote(webhook_url),
         "@REBOOT_SCRIPT@": (HOST_DIR / "report-reboot-status").read_text(encoding="utf-8"),
         "@DISK_SCRIPT@": (HOST_DIR / "report-disk-health").read_text(encoding="utf-8"),
+        "@GUEST_SCRIPT@": (HOST_DIR / "report-guest-updates").read_text(encoding="utf-8"),
     }
     for marker, value in replacements.items():
         template = template.replace(marker, value)

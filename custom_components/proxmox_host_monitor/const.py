@@ -15,6 +15,8 @@ SIGNAL_REBOOT_STATUS = f"{DOMAIN}_reboot_status"
 SIGNAL_DISK_REPORT = f"{DOMAIN}_disk_report"
 SIGNAL_NEW_DISKS = f"{DOMAIN}_new_disks"
 SIGNAL_NEW_POOLS = f"{DOMAIN}_new_pools"
+SIGNAL_GUEST_REPORT = f"{DOMAIN}_guest_report"
+SIGNAL_NEW_GUESTS = f"{DOMAIN}_new_guests"
 
 # Fired for disk failures, low space and disk removals (for notifications).
 EVENT_ALERT = f"{DOMAIN}_alert"
@@ -45,6 +47,9 @@ REBOOT_TIMEOUT = timedelta(minutes=30)
 # The disk health timer reports every 15 minutes; allow two missed reports.
 DISK_REPORT_TIMEOUT = timedelta(minutes=45)
 
+# The guest update timer reports every six hours; allow one missed report.
+GUEST_REPORT_TIMEOUT = timedelta(hours=13)
+
 STORAGE_KEY = f"{DOMAIN}.disks"
 STORAGE_VERSION = 1
 
@@ -61,14 +66,19 @@ ISSUE_DISK_FAILING = "disk_failing_{serial}"
 ISSUE_POOL_SPACE_LOW = "pool_space_low_{uuid}"
 ISSUE_REMOVAL_FAILED = "removal_failed_{serial}"
 ISSUE_HOST_PROBLEM = "host_{code}_{item}"
+ISSUE_GUEST_UPDATE_FAILED = "guest_update_failed_{vmid}"
 
 # A Btrfs pool with less free space than this share of its size is low on space.
 POOL_FREE_WARNING = 0.10
 
 ACTION_BTRFS_REMOVE = "btrfs_remove"
+ACTION_GUEST_UPDATE = "guest_update"
+ACTION_GUEST_ROLLBACK = "guest_rollback"
 
 # Device identifier prefix of Btrfs pools (disks use their serial number).
 POOL_PREFIX = "pool_"
+# Device identifier prefix of containers.
+GUEST_PREFIX = "guest_"
 # Key of the whole host in the health summaries.
 HOST_SCOPE = "host"
 # Key of the host problems (services, backups, temperatures, ...).

@@ -31,17 +31,22 @@ from .const import (
     DISK_REPORT_TIMEOUT,
     DISK_STATUSES,
     DOMAIN,
+    GUEST_PREFIX,
+    GUEST_REPORT_TIMEOUT,
     ISSUE_REBOOT_BUTTON_UNAVAILABLE,
     LEGACY_DOMAIN,
     POOL_PREFIX,
     SIGNAL_DISK_REPORT,
+    SIGNAL_GUEST_REPORT,
     SIGNAL_NEW_DISKS,
+    SIGNAL_NEW_GUESTS,
     SIGNAL_NEW_POOLS,
     SIGNAL_REBOOT_STATUS,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
 from .alerts import async_update_alerts
+from .guests import async_update_guest_alerts, valid_guests
 from .installer import async_register_install_view
 from .status import async_announce_changes
 
@@ -81,6 +86,15 @@ class ProxmoxHostRuntimeData:
     contexts: dict[str, Context] = field(default_factory=dict)
     # Latest health summary of the host and every filesystem.
     summaries: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Containers of the latest guest report, keyed by VMID as string.
+    guests: dict[str, dict[str, Any]] = field(default_factory=dict)
+    guests_reported_at: datetime | None = None
+    # Updates and rollbacks for the host, delivered with the next guest report.
+    guest_commands: list[dict[str, Any]] = field(default_factory=list)
+    # Command ID per VMID until the host reports it as started.
+    guest_requests: dict[str, str] = field(default_factory=dict)
+    # ID of the last update or rollback per VMID whose result was announced.
+    guest_handled: dict[str, str] = field(default_factory=dict)
     node_device: dr.DeviceEntry | None = None
     cancel_disk_timeout: CALLBACK_TYPE | None = None
 
@@ -95,6 +109,14 @@ class ProxmoxHostRuntimeData:
     def disk_available(self, serial: str) -> bool:
         """Return whether a disk was part of a recent report."""
         return self.disks_current and serial in self.present
+
+    @property
+    def guests_current(self) -> bool:
+        """Return whether the latest guest report is recent enough."""
+        return (
+            self.guests_reported_at is not None
+            and dt_util.utcnow() - self.guests_reported_at < GUEST_REPORT_TIMEOUT
+        )
 
 
 type ProxmoxHostConfigEntry = ConfigEntry[ProxmoxHostRuntimeData]
@@ -123,8 +145,14 @@ async def async_setup_entry(
         runtime_data.commands = stored.get("commands", [])
         runtime_data.removals = stored.get("removals", {})
         runtime_data.alerted = set(stored.get("alerted", []))
+        runtime_data.guests = stored.get("guests", {})
+        runtime_data.guest_commands = stored.get("guest_commands", [])
+        runtime_data.guest_requests = stored.get("guest_requests", {})
+        runtime_data.guest_handled = stored.get("guest_handled", {})
         if reported_at := stored.get("reported_at"):
             runtime_data.disks_reported_at = dt_util.parse_datetime(reported_at)
+        if guests_reported_at := stored.get("guests_reported_at"):
+            runtime_data.guests_reported_at = dt_util.parse_datetime(guests_reported_at)
     runtime_data.node_device = async_entity_id_to_device(
         hass, get_reboot_button(entry)
     )
@@ -180,7 +208,7 @@ async def async_remove_config_entry_device(
     entry: ProxmoxHostConfigEntry,
     device_entry: dr.DeviceEntry,
 ) -> bool:
-    """Allow removing disks and pools that are no longer reported."""
+    """Allow removing disks, pools and containers that are no longer reported."""
     runtime_data = entry.runtime_data
     identifiers = [
         identifier
@@ -190,6 +218,7 @@ async def async_remove_config_entry_device(
     if not identifiers or any(
         identifier in runtime_data.present
         or identifier.removeprefix(POOL_PREFIX) in runtime_data.pools
+        or identifier.removeprefix(GUEST_PREFIX) in runtime_data.guests
         for identifier in identifiers
     ):
         return False
@@ -233,6 +262,7 @@ async def _async_import_legacy_entry(
 def _stored_data(runtime_data: ProxmoxHostRuntimeData) -> dict[str, Any]:
     """Return the disk state that is persisted across restarts."""
     reported_at = runtime_data.disks_reported_at
+    guests_reported_at = runtime_data.guests_reported_at
     return {
         "disks": runtime_data.disks,
         "present": sorted(runtime_data.present),
@@ -242,6 +272,13 @@ def _stored_data(runtime_data: ProxmoxHostRuntimeData) -> dict[str, Any]:
         "removals": runtime_data.removals,
         "alerted": sorted(runtime_data.alerted),
         "reported_at": reported_at.isoformat() if reported_at else None,
+        "guests": runtime_data.guests,
+        "guest_commands": runtime_data.guest_commands,
+        "guest_requests": runtime_data.guest_requests,
+        "guest_handled": runtime_data.guest_handled,
+        "guests_reported_at": guests_reported_at.isoformat()
+        if guests_reported_at
+        else None,
     }
 
 
@@ -329,7 +366,7 @@ async def async_handle_webhook(
     webhook_id: str,
     request: web.Request,
 ) -> web.Response:
-    """Handle reboot status and disk health reports from the Proxmox host."""
+    """Handle reboot status, disk health and guest reports from the Proxmox host."""
     entry: ProxmoxHostConfigEntry | None = next(
         (
             config_entry
@@ -347,9 +384,9 @@ async def async_handle_webhook(
     except (ValueError, TypeError):
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
-    if not isinstance(payload, dict) or not payload.keys() & {"required", "disks"}:
+    if not isinstance(payload, dict) or not payload.keys() & {"required", "disks", "guests"}:
         return web.json_response(
-            {"error": "Payload must be a JSON object with 'required' or 'disks'"},
+            {"error": "Payload must be a JSON object with 'required', 'disks' or 'guests'"},
             status=400,
         )
 
@@ -385,6 +422,13 @@ async def async_handle_webhook(
             status=400,
         )
 
+    guests = payload.get("guests")
+    if "guests" in payload and not valid_guests(guests):
+        return web.json_response(
+            {"error": "'guests' must be a list of guest objects"},
+            status=400,
+        )
+
     runtime_data = entry.runtime_data
     response: dict[str, Any] = {"ok": True}
 
@@ -394,6 +438,7 @@ async def async_handle_webhook(
         response["required"] = required
         # Lets the host fetch queued commands without waiting for the disk timer.
         response["pending_commands"] = bool(runtime_data.commands)
+        response["pending_guest_commands"] = bool(runtime_data.guest_commands)
         async_dispatcher_send(hass, f"{SIGNAL_REBOOT_STATUS}_{entry.entry_id}")
 
     if disks is not None:
@@ -443,5 +488,30 @@ async def async_handle_webhook(
                 hass, f"{SIGNAL_NEW_POOLS}_{entry.entry_id}", new_pools
             )
         async_dispatcher_send(hass, f"{SIGNAL_DISK_REPORT}_{entry.entry_id}")
+
+    if guests is not None:
+        new_guests = [
+            str(guest["vmid"])
+            for guest in guests
+            if str(guest["vmid"]) not in runtime_data.guests
+        ]
+        runtime_data.guests = {str(guest["vmid"]): guest for guest in guests}
+        runtime_data.guests_reported_at = dt_util.utcnow()
+        response["guests"] = len(guests)
+
+        command_results = payload.get("command_results")
+        async_update_guest_alerts(
+            hass, entry, command_results if isinstance(command_results, list) else None
+        )
+        if runtime_data.guest_commands:
+            response["guest_commands"] = runtime_data.guest_commands
+            runtime_data.guest_commands = []
+        async_save(entry)
+
+        if new_guests:
+            async_dispatcher_send(
+                hass, f"{SIGNAL_NEW_GUESTS}_{entry.entry_id}", new_guests
+            )
+        async_dispatcher_send(hass, f"{SIGNAL_GUEST_REPORT}_{entry.entry_id}")
 
     return web.json_response(response)

@@ -9,7 +9,13 @@ from homeassistant.helpers import selector
 
 from . import async_save
 from .button_monitor import get_reboot_button
-from .const import ACTION_BTRFS_REMOVE, CONF_REBOOT_BUTTON, EVENT_ALERT
+from .const import (
+    ACTION_BTRFS_REMOVE,
+    ACTION_GUEST_ROLLBACK,
+    CONF_REBOOT_BUTTON,
+    EVENT_ALERT,
+)
+from .guests import async_queue_guest_command, update_running
 from .helpers import format_problems
 
 
@@ -134,6 +140,64 @@ class DiskRemovalRepairFlow(RepairsFlow):
         )
 
 
+class GuestRollbackRepairFlow(RepairsFlow):
+    """Confirm rolling a container back to the snapshot before its update."""
+
+    def __init__(self, entry_id: str, vmid: str, snapshot: str) -> None:
+        """Initialize the repair flow."""
+        self._entry_id = entry_id
+        self._vmid = vmid
+        self._snapshot = snapshot
+
+    async def async_step_init(
+        self,
+        user_input: dict[str, str] | None = None,
+    ) -> FlowResult:
+        """Start the repair flow."""
+        return await self.async_step_confirm_rollback()
+
+    async def async_step_confirm_rollback(
+        self,
+        user_input: dict[str, str] | None = None,
+    ) -> FlowResult:
+        """Queue the rollback for the host after confirmation."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or not hasattr(entry, "runtime_data"):
+            return self.async_abort(reason="entry_not_found")
+
+        guest = entry.runtime_data.guests.get(self._vmid)
+        if guest is None:
+            return self.async_abort(reason="guest_not_found")
+        if update_running(entry, self._vmid):
+            return self.async_abort(reason="guest_update_running")
+
+        if user_input is not None:
+            async_queue_guest_command(
+                entry, ACTION_GUEST_ROLLBACK, self._vmid, snapshot=self._snapshot
+            )
+            async_save(entry)
+            self.hass.bus.async_fire(
+                EVENT_ALERT,
+                {
+                    "type": "guest_rollback_requested",
+                    "guest": guest["name"],
+                    "vmid": guest["vmid"],
+                    "snapshot": self._snapshot,
+                },
+            )
+            return self.async_create_entry(data={})
+
+        return self.async_show_form(
+            step_id="confirm_rollback",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "guest": guest["name"],
+                "vmid": self._vmid,
+                "snapshot": self._snapshot,
+            },
+        )
+
+
 async def async_create_fix_flow(
     hass: HomeAssistant,
     issue_id: str,
@@ -141,6 +205,10 @@ async def async_create_fix_flow(
 ) -> RepairsFlow:
     """Create the repair flow for an issue."""
     assert data is not None
+    if issue_id.startswith("guest_update_failed_"):
+        return GuestRollbackRepairFlow(
+            str(data["entry_id"]), str(data["vmid"]), str(data["snapshot"])
+        )
     if issue_id.startswith("disk_failing_"):
         return DiskRemovalRepairFlow(
             str(data["entry_id"]), str(data["serial"]), str(data["pool"])

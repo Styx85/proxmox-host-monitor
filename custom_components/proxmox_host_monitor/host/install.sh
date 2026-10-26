@@ -21,7 +21,7 @@ if [ "$(id -u)" != 0 ]; then
     exit 1
 fi
 
-OWN_UNITS="proxmox-host-monitor-reboot proxmox-host-monitor-disks"
+OWN_UNITS="proxmox-host-monitor-reboot proxmox-host-monitor-disks proxmox-host-monitor-guests"
 LEGACY_FILES="/etc/systemd/system/proxmox-reboot-status.timer /etc/systemd/system/proxmox-reboot-status.service /usr/local/sbin/report-reboot-status-to-ha"
 
 # Print "kind<TAB>description<TAB>path" for everything that already exists.
@@ -136,7 +136,10 @@ cat > /usr/local/sbin/proxmox-host-monitor-reboot <<'PHM_EOF'
 @REBOOT_SCRIPT@PHM_EOF
 cat > /usr/local/sbin/proxmox-host-monitor-disks <<'PHM_EOF'
 @DISK_SCRIPT@PHM_EOF
-chmod 750 /usr/local/sbin/proxmox-host-monitor-reboot /usr/local/sbin/proxmox-host-monitor-disks
+cat > /usr/local/sbin/proxmox-host-monitor-guests <<'PHM_EOF'
+@GUEST_SCRIPT@PHM_EOF
+chmod 750 /usr/local/sbin/proxmox-host-monitor-reboot /usr/local/sbin/proxmox-host-monitor-disks \
+    /usr/local/sbin/proxmox-host-monitor-guests
 
 cat > /etc/systemd/system/proxmox-host-monitor-reboot.service <<'PHM_EOF'
 [Unit]
@@ -181,6 +184,31 @@ Description=Proxmox Host Monitor: report disk health every 15 minutes
 [Timer]
 OnBootSec=3min
 OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+PHM_EOF
+
+cat > /etc/systemd/system/proxmox-host-monitor-guests.service <<'PHM_EOF'
+[Unit]
+Description=Proxmox Host Monitor: report container updates to Home Assistant
+After=network-online.target pve-guests.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/proxmox-host-monitor-guests
+Nice=10
+PHM_EOF
+
+cat > /etc/systemd/system/proxmox-host-monitor-guests.timer <<'PHM_EOF'
+[Unit]
+Description=Proxmox Host Monitor: report container updates every 6 hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
 Persistent=true
 
 [Install]
