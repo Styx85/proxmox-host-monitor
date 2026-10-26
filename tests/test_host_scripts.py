@@ -168,3 +168,27 @@ async def test_hwmon_ignores_bogus_limits(tmp_path, monkeypatch):
         {"chip": "it8655", "label": "temp2", "value": 43.0, "max": 70.0},
     ]
     assert fans == [{"chip": "it8655", "label": "fan1", "rpm": 1051}]
+
+
+async def test_self_test_age_from_smartd_log():
+    """smartd's log wins when the disk's self-test hours do not match its power-on hours."""
+    now = m.time.time()
+    calls = []
+    m.run = fake({"journalctl": (
+        f"{int(now) - 5 * 3600} HeimserverLP smartd[1]: Device: /dev/sdd [SAT], "
+        "previous self-test completed without error\n"
+        f"{int(now) - 3 * 3600} HeimserverLP smartd[1]: Device /dev/nvme0, "
+        "previous short self-test completed without error\n"
+    )}, calls)
+    completions = m.self_test_completions()
+    assert set(completions) == {"sdd", "nvme0"}
+
+    # Old WD disk: self-test log at hour 234, power-on hours 10071.
+    test = {"type": {"string": "Short offline"},
+            "status": {"string": "Completed without error", "passed": True},
+            "lifetime_hours": 234}
+    data = _smart(10071, [test])
+    m.smartctl = lambda *args: (data, 0)
+    disk = m.check_disk({"name": "/dev/sdd", "type": "sat"}, completions)
+    assert disk["self_test"]["hours_ago"] == 5
+    assert disk["problems"] == []
