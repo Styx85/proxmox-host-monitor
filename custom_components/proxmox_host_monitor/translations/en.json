@@ -406,7 +406,7 @@
         "step": {
           "confirm_rollback": {
             "title": "Roll {guest} back to {snapshot}?",
-            "description": "The update of container **{guest}** (CT {vmid}) failed: {error}\n\nThe snapshot `{snapshot}` was taken right before the update. Rolling back restores the container to that state and starts it again; everything changed in the container since then is lost. Data on bind mounts is not part of the snapshot and stays as it is.\n\nThe host picks up the request within 5 minutes. The full log is in `/var/log/proxmox-host-monitor/guest-{vmid}.log` on the Proxmox host."
+            "description": "The update of container **{guest}** (CT {vmid}) failed: {error}\n\nThe restore point `{snapshot}` was made right before the update: a snapshot, or a backup for containers with bind mounts. Rolling back restores the container to that state and starts it again; everything changed in the container since then is lost. Data on bind mounts is not part of it and stays as it is.\n\nThe host picks up the request within 5 minutes. The full log is in `/var/log/proxmox-host-monitor/guest-{vmid}.log` on the Proxmox host."
           }
         },
         "abort": {

@@ -22,8 +22,8 @@ Proxmox Host Monitor replaces **Proxmox Reboot Update**. An existing installatio
 **Container updates**
 
 - One update entity per LXC container: pending packages (`apt-get dist-upgrade`, including third-party repositories) and, for containers installed with the [Proxmox VE community scripts](https://community-scripts.org), the installed and the latest app version. The latest version is the one the community script would install, so pinned versions (for example Immich) are respected.
-- Installing takes a snapshot of the container (`phm_<date>`), upgrades the packages and runs the community scripts' `update` without questions. The previous update's snapshot is deleted afterwards, the new one is kept.
-- A failed update raises a repair issue that rolls the container back to the snapshot. Bind mounts are not part of the snapshot.
+- Installing makes a restore point, upgrades the packages and runs the community scripts' `update` without questions. The restore point is a snapshot (`phm_<date>`); containers with bind mounts cannot be snapshotted, they get a protected `vzdump` backup on the backup storage with the most free space instead (or the one in `/etc/proxmox-host-monitor/backup-storage`). The previous update's restore point is deleted afterwards, the new one is kept.
+- A failed update raises a repair issue that rolls the container back (`pct rollback` or `pct restore`). Bind mounts are not part of the restore point.
 - Checked every 6 hours; the host picks up an install within 5 minutes. Stopped containers are unavailable. Virtual machines are not covered.
 
 **Disk health**

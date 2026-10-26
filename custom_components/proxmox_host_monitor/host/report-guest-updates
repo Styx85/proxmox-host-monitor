@@ -6,8 +6,12 @@ container: pending packages and, for containers installed with the Proxmox VE
 community scripts, the installed and the latest app version. Home Assistant
 answers with queued commands, which run as transient systemd units:
 
-    --update VMID ID              snapshot, upgrade packages, update the app
-    --rollback VMID SNAPSHOT ID   roll back to the snapshot and start again
+    --update VMID ID           restore point, upgrade packages, update the app
+    --rollback VMID POINT ID   go back to the restore point and start again
+
+The restore point is a snapshot. Containers with bind mounts cannot be
+snapshotted; for them a protected vzdump backup (without the bind mounts) is
+made instead and restored with pct restore.
 """
 
 from datetime import datetime, timezone
@@ -22,6 +26,8 @@ import urllib.request
 
 WEBHOOK_URL_FILE = "/etc/proxmox-host-monitor/webhook-url"
 GITHUB_TOKEN_FILE = "/etc/proxmox-host-monitor/github-token"
+BACKUP_STORAGE_FILE = "/etc/proxmox-host-monitor/backup-storage"
+BACKUP_NOTES = "Proxmox Host Monitor: before update"
 STATE_DIR = "/var/lib/proxmox-host-monitor/guests"
 LOG_DIR = "/var/log/proxmox-host-monitor"
 SELF = "/usr/local/sbin/proxmox-host-monitor-guests"
@@ -33,9 +39,12 @@ COMMUNITY_URL = re.compile(r"https://raw\.githubusercontent\.com/community-scrip
 SCRIPT_NAME = re.compile(r"[\w.-]+")
 REPO = re.compile(r"[\w.-]+/[\w.-]+")
 COMMAND_ID = re.compile(r"[0-9a-f]{8,64}")
+SNAPSHOT = re.compile(rf"{SNAPSHOT_PREFIX}\w+")
+BACKUP_VOLID = re.compile(r"[\w.-]+:backup/vzdump-lxc-(\d+)-[\w.-]+")
 
 APT_TIMEOUT = 3600
 APP_TIMEOUT = 3 * 3600
+BACKUP_TIMEOUT = 3 * 3600
 
 ENV = ("env", "DEBIAN_FRONTEND=noninteractive", "TERM=dumb", "PHS_SILENT=1")
 APT_OPTIONS = (
@@ -288,7 +297,8 @@ def execute(command, guests):
         description = f"update CT {vmid}"
     else:
         snapshot = str(command.get("snapshot", ""))
-        if not re.fullmatch(rf"{SNAPSHOT_PREFIX}\w+", snapshot):
+        backup = BACKUP_VOLID.fullmatch(snapshot)
+        if not SNAPSHOT.fullmatch(snapshot) and not (backup and backup.group(1) == str(vmid)):
             return "invalid snapshot"
         args = ["--rollback", str(vmid), snapshot, command_id]
         description = f"roll back CT {vmid} to {snapshot}"
@@ -346,11 +356,108 @@ def snapshots(vmid):
     return re.findall(rf"({SNAPSHOT_PREFIX}\w+)", output)
 
 
+def backup_storages():
+    """Return the active storages for backups, the one with most space first."""
+    storages = []
+    for line in run("pvesm", "status", "--content", "backup").stdout.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) >= 6 and fields[2] == "active" and fields[5].isdigit():
+            storages.append((int(fields[5]), fields[0]))
+    return [name for _, name in sorted(storages, reverse=True)]
+
+
+def backup_storage():
+    try:
+        with open(BACKUP_STORAGE_FILE, encoding="utf-8") as file:
+            if configured := file.read().strip():
+                return configured
+    except OSError:
+        pass
+    storages = backup_storages()
+    return storages[0] if storages else None
+
+
+def own_backups(vmid):
+    """Return the volume IDs of the backups made before updates, oldest first."""
+    backups = []
+    for storage in backup_storages():
+        output = run(
+            "pvesh", "get", f"/nodes/localhost/storage/{storage}/content",
+            "--content", "backup", "--vmid", str(vmid), "--output-format", "json",
+        ).stdout
+        try:
+            content = json.loads(output or "[]")
+        except ValueError:
+            continue
+        backups += [
+            (item.get("ctime", 0), item["volid"])
+            for item in content
+            if item.get("notes") == BACKUP_NOTES and "volid" in item
+        ]
+    return [volid for _, volid in sorted(backups)]
+
+
+def unrestorable_volumes(vmid):
+    """Return mount points on storages that a backup would leave out."""
+    config = run("pct", "config", str(vmid)).stdout
+    return [
+        match.group(1)
+        for match in re.finditer(r"^(mp\d+): ([^,\s]+)(.*)$", config, re.M)
+        if ":" in match.group(2) and not match.group(2).startswith("/")
+        and "backup=1" not in match.group(3)
+    ]
+
+
+def restore_point(vmid, log):
+    """Take a snapshot, or a backup where snapshots are impossible.
+
+    Returns (point, error).
+    """
+    snapshot = f"{SNAPSHOT_PREFIX}{datetime.now():%Y%m%d_%H%M%S}"
+    result = run(
+        "pct", "snapshot", str(vmid), snapshot,
+        "--description", BACKUP_NOTES, timeout=600,
+    )
+    if log.step("snapshot", result):
+        return snapshot, None
+
+    # Bind mounts rule out snapshots; a backup leaves them out by default.
+    if volumes := unrestorable_volumes(vmid):
+        return None, f"no snapshot possible and {', '.join(volumes)} would be missing in a backup"
+    storage = backup_storage()
+    if storage is None:
+        return None, f"snapshot failed ({Log.tail(result, 1)}) and no backup storage found"
+    before = set(own_backups(vmid))
+    result = run(
+        "vzdump", str(vmid), "--storage", storage, "--mode", "snapshot",
+        "--compress", "zstd", "--protected", "1", "--remove", "0",
+        "--notes-template", BACKUP_NOTES, timeout=BACKUP_TIMEOUT,
+    )
+    new = [volid for volid in own_backups(vmid) if volid not in before]
+    if not log.step(f"vzdump to {storage}", result) or not new:
+        return None, f"backup failed: {Log.tail(result, 2)}"
+    return new[-1], None
+
+
+def remove_old_restore_points(vmid, keep, log):
+    """Keep only the restore point of the latest update, the rest fills storage."""
+    for old in snapshots(vmid):
+        if old != keep:
+            log.step(f"delete snapshot {old}", run("pct", "delsnapshot", str(vmid), old, timeout=600))
+    for old in own_backups(vmid):
+        if old != keep:
+            storage, _ = old.split(":", 1)
+            run(
+                "pvesh", "set", f"/nodes/localhost/storage/{storage}/content/{old}",
+                "--protected", "0",
+            )
+            log.step(f"delete backup {old}", run("pvesm", "free", old, timeout=600))
+
+
 def update(vmid, command_id):
-    """Snapshot the container, upgrade its packages and update its app."""
+    """Save a restore point, upgrade the packages and update the app."""
     releases = Releases()
     before = app_info(vmid, releases) or {}
-    snapshot = f"{SNAPSHOT_PREFIX}{datetime.now():%Y%m%d_%H%M%S}"
     state = {
         "id": command_id, "action": "update", "state": "running", "started": now(),
         "snapshot": None, "from": before.get("installed"), "to": None,
@@ -362,12 +469,9 @@ def update(vmid, command_id):
         state.update(state="failed", error=error, finished=now())
         save_state(vmid, state)
 
-    result = run(
-        "pct", "snapshot", str(vmid), snapshot,
-        "--description", "Proxmox Host Monitor: before update", timeout=600,
-    )
-    if not log.step("snapshot", result):
-        return fail(f"snapshot failed: {Log.tail(result, 2)}")
+    snapshot, error = restore_point(vmid, log)
+    if error:
+        return fail(error)
     state["snapshot"] = snapshot
     save_state(vmid, state)
 
@@ -392,10 +496,7 @@ def update(vmid, command_id):
                 f"expected {before['latest']}: {Log.tail(result)}"
             )
 
-    # Keep only the snapshot of this update, older ones grow the thin pool.
-    for old in snapshots(vmid):
-        if old != snapshot:
-            log.step(f"delete snapshot {old}", run("pct", "delsnapshot", str(vmid), old, timeout=600))
+    remove_old_restore_points(vmid, snapshot, log)
     state.update(state="done", finished=now(), error=None)
     save_state(vmid, state)
 
@@ -407,12 +508,31 @@ def rollback(vmid, snapshot, command_id):
     }
     save_state(vmid, state)
     log = Log(vmid)
-    result = run("pct", "rollback", str(vmid), snapshot, "--start", "1", timeout=1800)
+    if SNAPSHOT.fullmatch(snapshot):
+        result = run("pct", "rollback", str(vmid), snapshot, "--start", "1", timeout=1800)
+    else:
+        result = restore_backup(vmid, snapshot, log)
     if log.step(f"rollback {snapshot}", result):
         state.update(state="done", finished=now(), error=None)
     else:
         state.update(state="failed", finished=now(), error=Log.tail(result, 3))
     save_state(vmid, state)
+
+
+def restore_backup(vmid, volid, log):
+    """Replace the container with the backup made before the update."""
+    rootfs = re.search(r"^rootfs: ([\w.-]+):", run("pct", "config", str(vmid)).stdout, re.M)
+    if rootfs is None:
+        return subprocess.CompletedProcess((), 1, "", "root disk storage not found")
+    log.step("stop", run("pct", "stop", str(vmid), timeout=600))
+    result = run(
+        "pct", "restore", str(vmid), volid, "--force", "1",
+        "--storage", rootfs.group(1), timeout=BACKUP_TIMEOUT,
+    )
+    if result.returncode == 0:
+        log.step("restore", result)
+        result = run("pct", "start", str(vmid), timeout=600)
+    return result
 
 
 def main():

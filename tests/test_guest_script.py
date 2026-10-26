@@ -127,3 +127,62 @@ async def test_interrupted_update(tmp_path):
     state = m.last_action(103)
     assert state["state"] == "failed" and state["error"] == "interrupted"
     assert m.load_state(103)["state"] == "failed"
+
+
+class StepLog:
+    def __init__(self):
+        self.steps = []
+
+    def step(self, title, result):
+        self.steps.append(title)
+        return result.returncode == 0
+
+
+async def test_backup_when_snapshot_impossible():
+    """Containers with bind mounts get a protected backup instead of a snapshot."""
+    backup = "pool:backup/vzdump-lxc-107-2026_10_26-09_30_00.tar.zst"
+    listings = iter(["[]", f'[{{"volid": "{backup}", "notes": "{m.BACKUP_NOTES}", "ctime": 2}}]'])
+    calls = []
+
+    def run(*args, timeout=120):
+        calls.append(args)
+        key = " ".join(args)
+        out, code = "", 0
+        if key.startswith("pct snapshot"):
+            code = 255
+        elif key.startswith("pct config"):
+            out = "mp0: /mnt/storage/watch,mp=/srv/watch\nrootfs: local-lvm:vm-107-disk-0,size=4G\n"
+        elif key.startswith("pvesm status"):
+            out = ("Name Type Status Total Used Available %\n"
+                   "local dir active 100 50 50 50%\npool btrfs active 900 100 800 11%\n")
+        elif key.startswith("pvesh get"):
+            out = next(listings) if "/pool/" in key else "[]"
+        return types.SimpleNamespace(stdout=out, stderr="", returncode=code)
+
+    m.run = run
+    m.BACKUP_STORAGE_FILE = "/nonexistent"
+    assert m.restore_point(107, StepLog()) == (backup, None)
+    vzdump = next(call for call in calls if call[0] == "vzdump")
+    assert vzdump[1] == "107" and "pool" in vzdump and "--protected" in vzdump
+
+
+async def test_no_backup_with_unsaved_volumes():
+    """A mount point on a storage without backup=1 would be lost on restore."""
+    def run(*args, timeout=120):
+        key = " ".join(args)
+        out = "mp0: local-lvm:vm-107-disk-1,mp=/data,size=8G\n" if key.startswith("pct config") else ""
+        return types.SimpleNamespace(stdout=out, stderr="", returncode=255 if "snapshot" in key else 0)
+
+    m.run = run
+    point, error = m.restore_point(107, StepLog())
+    assert point is None and "mp0" in error
+
+
+async def test_rollback_validation():
+    """Only snapshots and backups of the same container can be restored."""
+    calls = []
+    m.run = fake({"systemctl is-active": (3, "")}, calls)
+    command = {"action": "guest_rollback", "vmid": 103, "id": "abcdef01"}
+    assert m.execute({**command, "snapshot": "pool:backup/vzdump-lxc-103-2026_10_26.tar.zst"}, GUESTS) == "started"
+    assert m.execute({**command, "snapshot": "pool:backup/vzdump-lxc-104-2026_10_26.tar.zst"}, GUESTS) == "invalid snapshot"
+    assert m.execute({**command, "snapshot": "pool:backup/../etc/passwd"}, GUESTS) == "invalid snapshot"

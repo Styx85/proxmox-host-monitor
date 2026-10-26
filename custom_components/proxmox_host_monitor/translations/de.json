@@ -406,7 +406,7 @@
         "step": {
           "confirm_rollback": {
             "title": "{guest} auf {snapshot} zurücksetzen?",
-            "description": "Das Update von Container **{guest}** (CT {vmid}) ist fehlgeschlagen: {error}\n\nDer Snapshot `{snapshot}` wurde direkt vor dem Update angelegt. Beim Zurücksetzen bekommt der Container genau diesen Stand und startet neu; alles, was sich seitdem im Container geändert hat, geht verloren. Daten auf Bind-Mounts gehören nicht zum Snapshot und bleiben unverändert.\n\nDer Host holt den Auftrag innerhalb von 5 Minuten ab. Das vollständige Protokoll liegt auf dem Proxmox-Host in `/var/log/proxmox-host-monitor/guest-{vmid}.log`."
+            "description": "Das Update von Container **{guest}** (CT {vmid}) ist fehlgeschlagen: {error}\n\nDer Sicherungspunkt `{snapshot}` wurde direkt vor dem Update angelegt: ein Snapshot oder, bei Containern mit Bind-Mounts, eine Sicherung. Beim Zurücksetzen bekommt der Container genau diesen Stand und startet neu; alles, was sich seitdem im Container geändert hat, geht verloren. Daten auf Bind-Mounts gehören nicht dazu und bleiben unverändert.\n\nDer Host holt den Auftrag innerhalb von 5 Minuten ab. Das vollständige Protokoll liegt auf dem Proxmox-Host in `/var/log/proxmox-host-monitor/guest-{vmid}.log`."
           }
         },
         "abort": {
