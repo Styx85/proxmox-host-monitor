@@ -39,8 +39,8 @@ The evaluation is deliberately strict:
 
 | Health | Triggered by |
 |---|---|
-| critical | SMART failed, failure predicted, pending or offline uncorrectable sectors, reported uncorrectable errors, Btrfs device errors, NVMe critical warning, media errors or spare below threshold, temperature ≥ 55 °C |
-| warning | reallocated sectors, CRC errors, command timeouts, errors in the SMART error log, failed self-test, no self-test within the last 8 days of power-on time, attribute below threshold in the past, NVMe wear ≥ 80 %, temperature ≥ 50 °C |
+| critical | SMART failed, failure predicted, pending sectors still pending after 24 hours, offline uncorrectable sectors, reported uncorrectable errors, Btrfs device errors, NVMe critical warning, media errors or spare below threshold, temperature ≥ 55 °C |
+| warning | pending sectors (some SSDs report them for a few minutes while rewriting a block), reallocated sectors, CRC errors, command timeouts, errors in the SMART error log, failed self-test, no self-test within the last 8 days of power-on time, attribute below threshold in the past, NVMe wear ≥ 80 %, temperature ≥ 50 °C |
 
 ### Regular self-tests
 
@@ -116,7 +116,7 @@ The integration fires `proxmox_host_monitor_alert` once per situation:
 
 | `type` | Data |
 |---|---|
-| `disk_failing` | `disk`, `model`, `serial`, `problems`, `pool`, `removable`, `balance_running`, `missing_gb`, `recommended_gb` |
+| `disk_failing` | `disk`, `model`, `serial`, `problems`, `pool`, `removable`, `balance_running`, `missing_gb`, `needed_gb`, `recommended_gb` |
 | `pool_space_low` | `pool`, `free_gb`, `percentage` |
 | `removal_requested`, `removal_started`, `removal_finished` | `disk`, `serial`, `pool` |
 | `removal_failed` | `disk`, `serial`, `reason` |
@@ -140,7 +140,7 @@ actions:
         {% if d.type == 'disk_failing' %}
           {{ d.disk }} ({{ d.model }}) is failing: {{ d.problems | join(', ') }}.
           {% if d.removable %}It can be removed from {{ d.pool }} under Settings → Repairs.
-          {% elif d.missing_gb %}Buy a new disk of at least {{ d.recommended_gb }} GB.{% endif %}
+          {% elif d.missing_gb %}Buy a new disk of {{ d.recommended_gb }} GB (at least {{ d.needed_gb }} GB).{% endif %}
         {% elif d.type == 'pool_space_low' %}
           Only {{ d.free_gb }} GB ({{ d.percentage }} %) free on {{ d.pool }}.
         {% else %}
@@ -212,7 +212,7 @@ Custom scripts can report to the same webhook (`POST`, JSON, local network only)
       "status": "ok",
       "temperature": 37,
       "pending_sectors": 0,
-      "problems": [{"code": "pending_sectors", "severity": "critical", "value": 3}]
+      "problems": [{"code": "pending_sectors", "severity": "warning", "value": 3}]
     }
   ]
 }

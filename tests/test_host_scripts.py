@@ -67,6 +67,45 @@ async def test_fits():
     assert m.fits({"raid5": 1500 * m.GIB}, [T, T, T]) == 0
 
 
+async def test_replacement_size():
+    """A two-disk mirror needs a new disk as large as its data, not the remaining disk."""
+    profiles = {"raid1": 40 * m.GIB}
+    remaining = [120 * 10**9]
+    # Removing a disk leaves one, which is never enough for raid1 ...
+    assert m.fits(profiles, remaining) == sum(remaining)
+    # ... but any new disk that holds the 40 GiB is.
+    size = m.replacement_size(profiles, remaining)
+    assert 40 * m.GIB <= size <= 42 * m.GIB
+    assert m.fits(profiles, [*remaining, size]) == 0
+    # Data larger than the remaining disk cannot be saved by one new disk.
+    assert m.replacement_size({"raid1": 200 * m.GIB}, remaining) is None
+
+
+async def test_pending_sectors_need_to_persist(monkeypatch):
+    """Pending sectors are a warning first and critical when still there a day later."""
+    data = _smart(1000, [], supported=False)
+    data["ata_smart_attributes"] = {"table": [{"id": 197, "raw": {"value": 1}}]}
+    m.smartctl = lambda *args: (data, 0)
+    now = 1_800_000_000
+    monkeypatch.setattr(m.time, "time", lambda: now)
+    pending_since = {}
+
+    disk = m.check_disk({"name": "/dev/sde", "type": "sat"}, None, pending_since)
+    assert disk["status"] == "warning"
+    assert disk["problems"] == [{"code": "pending_sectors", "severity": "warning", "value": 1}]
+    assert pending_since == {"S": now}
+
+    now += m.PENDING_CRITICAL_AFTER
+    disk = m.check_disk({"name": "/dev/sde", "type": "sat"}, None, pending_since)
+    assert disk["status"] == "critical"
+
+    # The sector was rewritten: the disk is fine and the clock starts over.
+    data["ata_smart_attributes"]["table"][0]["raw"]["value"] = 0
+    disk = m.check_disk({"name": "/dev/sde", "type": "sat"}, None, pending_since)
+    assert disk["status"] == "ok"
+    assert pending_since == {}
+
+
 def _smart(hours, tests, supported=True):
     return {
         "model_name": "X",

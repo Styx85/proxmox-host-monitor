@@ -20,5 +20,5 @@
     "asyncssh>=2.20.0"
   ],
   "single_config_entry": true,
-  "version": "2.5.1"
+  "version": "2.5.2"
 }

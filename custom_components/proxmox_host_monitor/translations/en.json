@@ -326,7 +326,7 @@
     },
     "disk_failing_no_space": {
       "title": "Disk {disk} is failing: buy a new disk",
-      "description": "Disk **{disk}** ({model}, serial {serial}) reports critical problems: {problems}.\n\nThe remaining disks of `{pool}` are too small to take over its data: about **{missing} GB** are missing. Add a new disk of at least **{recommended} GB** to the filesystem as soon as possible, then remove {disk}."
+      "description": "Disk **{disk}** ({model}, serial {serial}) reports critical problems: {problems}.\n\nThe remaining disks of `{pool}` cannot take over its data on their own. Add a new disk to the filesystem as soon as possible, then remove {disk}. It needs to hold at least **{needed} GB**; **{recommended} GB** are recommended so the filesystem does not shrink."
     },
     "pool_space_low": {
       "title": "Filesystem {pool} is running out of space",

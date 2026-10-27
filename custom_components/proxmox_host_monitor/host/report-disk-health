@@ -2,13 +2,15 @@
 """Report disk, storage and host health to Home Assistant (Proxmox Host Monitor).
 
 Runs from proxmox-host-monitor-disks.timer and immediately when smartd raises
-a warning. The evaluation is deliberately strict: every pending or
-uncorrectable sector and every Btrfs device error counts as critical.
+a warning. The evaluation is deliberately strict: every uncorrectable sector
+and every Btrfs device error counts as critical, and so does a pending sector
+that is still pending a day later.
 """
 
 from datetime import datetime, timezone
 import glob
 import json
+import os
 import re
 import socket
 import time
@@ -17,6 +19,8 @@ import sys
 import urllib.request
 
 WEBHOOK_URL_FILE = "/etc/proxmox-host-monitor/webhook-url"
+# When each disk first reported pending sectors, by serial.
+PENDING_STATE_FILE = "/var/lib/proxmox-host-monitor/pending-sectors.json"
 
 TEMP_WARNING = 50
 TEMP_CRITICAL = 55
@@ -30,7 +34,7 @@ ATA_CHECKS = {
     5: ("reallocated_sectors", "warning"),
     187: ("reported_uncorrectable", "critical"),
     188: ("command_timeouts", "warning"),
-    197: ("pending_sectors", "critical"),
+    197: ("pending_sectors", "warning"),
     198: ("offline_uncorrectable", "critical"),
     199: ("crc_errors", "warning"),
 }
@@ -41,6 +45,9 @@ DAY = 24 * 3600
 SCRUB_MAX_AGE = 35 * DAY
 BACKUP_MAX_AGE = 8 * DAY
 CERT_WARNING = 30 * DAY
+# Some SSDs (Crucial/Micron) count a sector as pending for a few minutes
+# while they rewrite it; only a sector still pending after this is critical.
+PENDING_CRITICAL_AFTER = DAY
 THIN_WARNING = 80
 THIN_CRITICAL = 90
 # Host temperature limits when the sensor does not provide its own.
@@ -120,7 +127,10 @@ def self_test_completions():
     return completions
 
 
-def check_disk(dev, completions=None):
+def check_disk(dev, completions=None, pending_since=None):
+    """Evaluate one disk; pending_since maps serials to when pending sectors appeared."""
+    if pending_since is None:
+        pending_since = {}
     data, rc = smartctl("-a", "-n", "standby", "-d", dev["type"], dev["name"])
     # A disk in standby is skipped instead of being woken up.
     if rc & 2 and not data.get("smart_status"):
@@ -161,6 +171,13 @@ def check_disk(dev, completions=None):
             # Some vendors pack extra data into the upper bytes.
             value = attr["raw"]["value"] & 0xFFFFFFFF
             disk[key] = value
+            if attr["id"] == 197:
+                if value == 0:
+                    pending_since.pop(disk["serial"], None)
+                    continue
+                since = pending_since.setdefault(disk["serial"], int(time.time()))
+                if time.time() - since >= PENDING_CRITICAL_AFTER:
+                    severity = "critical"
             if value > 0:
                 problem(key, severity, value)
 
@@ -275,6 +292,25 @@ def fits(profiles, sizes):
     return int(max(missing, needed - total, 0))
 
 
+def replacement_size(profiles, sizes):
+    """Return the smallest new disk that lets these devices hold all data.
+
+    None when a single additional disk is not enough, e.g. when a mirror's
+    data does not fit on the remaining disks however large the new one is.
+    """
+    high = 4 * sum(profiles.values()) + sum(sizes) + 1024 * GIB
+    if fits(profiles, [*sizes, high]):
+        return None
+    low = 0
+    while high - low > GIB:
+        middle = (low + high) // 2
+        if fits(profiles, [*sizes, middle]):
+            low = middle
+        else:
+            high = middle
+    return high
+
+
 def btrfs_pools(mounts, serials):
     """Describe every Btrfs filesystem and whether each disk could be removed."""
     pools = []
@@ -310,6 +346,10 @@ def btrfs_pools(mounts, serials):
         for device in devices:
             others = [d["size"] for d in devices if d is not device]
             device["missing_after_removal"] = fits(profiles, others)
+            if device["missing_after_removal"]:
+                # A two-disk mirror cannot shrink to one disk at all, so the
+                # bytes missing say little; what helps is a new disk this big.
+                device["replacement_size"] = replacement_size(profiles, others)
 
         pools.append({
             "uuid": uuid,
@@ -442,6 +482,21 @@ def read(path, default=None):
             return file.read().strip()
     except OSError:
         return default
+
+
+def load_json(path, default):
+    try:
+        with open(path, encoding="utf-8") as file:
+            return json.load(file)
+    except (OSError, ValueError):
+        return default
+
+
+def save_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(f"{path}.tmp", "w", encoding="utf-8") as file:
+        json.dump(data, file)
+    os.replace(f"{path}.tmp", path)
 
 
 def hwmon():
@@ -670,9 +725,13 @@ def post(payload):
 def main():
     scan, _ = smartctl("--scan-open")
     completions = self_test_completions()
+    pending_since = load_json(PENDING_STATE_FILE, {})
     disks = [
-        d for d in (check_disk(dev, completions) for dev in scan.get("devices", [])) if d
+        d for d in (check_disk(dev, completions, pending_since) for dev in scan.get("devices", []))
+        if d
     ]
+    if "--dry-run" not in sys.argv:
+        save_json(PENDING_STATE_FILE, pending_since)
 
     mounts = btrfs_mounts()
     errors = btrfs_errors(mounts)
