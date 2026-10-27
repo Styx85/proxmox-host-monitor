@@ -53,10 +53,25 @@ def _gb(value: float) -> int:
     return math.ceil(value / GB)
 
 
-def recommended_size(missing: int) -> int:
-    """Return a disk size in GB that covers the missing space with headroom."""
-    # Round up to the next 500 GB with a quarter extra for growth.
-    return max(500, math.ceil(missing * 1.25 / (500 * GB)) * 500)
+# Disk sizes in GB as they are sold.
+COMMON_SIZES = (128, 250, 500, 1000, 2000, 4000, 8000, 12000, 16000, 20000, 24000)
+
+
+def needed_size(device: dict[str, Any]) -> int:
+    """Return the bytes a new disk needs so the failing one can leave its pool."""
+    # Hosts before 2.5.2 only report the bytes missing on the other disks.
+    return int(device.get("replacement_size") or device.get("missing_after_removal") or 0)
+
+
+def recommended_size(device: dict[str, Any]) -> int:
+    """Return a disk size in GB to buy as a replacement for a failing disk."""
+    # A quarter extra for growth, and not smaller than the failing disk so
+    # the pool keeps its size.
+    wanted = max(needed_size(device) * 1.25, int(device.get("size") or 0)) / GB
+    for size in COMMON_SIZES:
+        if size >= wanted:
+            return size
+    return math.ceil(wanted / 4000) * 4000
 
 
 @callback
@@ -125,7 +140,8 @@ def async_update_alerts(
                 "problems": problems,
                 "pool": pool["mount"] if pool else "",
                 "missing": str(_gb(missing)),
-                "recommended": str(recommended_size(missing)),
+                "needed": str(_gb(needed_size(device))) if missing else "",
+                "recommended": str(recommended_size(device)) if missing else "",
             },
             data={
                 "entry_id": entry.entry_id,
@@ -153,7 +169,8 @@ def async_update_alerts(
                 removable=removal_possible(runtime_data, serial),
                 balance_running=bool(pool and pool.get("balance_running")),
                 missing_gb=_gb(missing),
-                recommended_gb=recommended_size(missing) if missing else None,
+                needed_gb=_gb(needed_size(device)) if missing else None,
+                recommended_gb=recommended_size(device) if missing else None,
             )
 
     for uuid, pool in runtime_data.pools.items():

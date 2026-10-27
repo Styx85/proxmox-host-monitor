@@ -143,6 +143,22 @@ async def test_failing_disk_not_removable(hass, entry, report, pool, key, fixabl
         assert events[0].data["recommended_gb"] == 500
 
 
+async def test_failing_disk_in_two_disk_mirror(hass, entry, report):
+    """A two-disk mirror asks for a replacement as large as the data needs, not the bytes missing."""
+    events = async_capture_events(hass, EVENT_ALERT)
+    pool = _pool(missing=120 * GB)
+    # 240 GB SSD with 40 GB of data next to a 120 GB SSD.
+    pool["devices"][1] |= {"size": 240 * GB, "replacement_size": 42 * GB}
+    await report({"disks": [GOOD, BAD], "pools": [pool]})
+    issue = _issue(hass, "disk_failing_BAD")
+    assert issue.translation_key == "disk_failing_no_space"
+    assert issue.translation_placeholders["needed"] == "42"
+    # Not smaller than the failing disk, rounded to a size that is sold.
+    assert issue.translation_placeholders["recommended"] == "250"
+    assert events[0].data["needed_gb"] == 42
+    assert events[0].data["recommended_gb"] == 250
+
+
 async def test_failing_disk_outside_pool(hass, entry, report):
     """A failing disk without a pool gets a plain issue."""
     await report({"disks": [BAD]})

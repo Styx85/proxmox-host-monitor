@@ -326,7 +326,7 @@
     },
     "disk_failing_no_space": {
       "title": "Festplatte {disk} fällt aus: neue Platte kaufen",
-      "description": "Die Festplatte **{disk}** ({model}, Seriennummer {serial}) meldet kritische Probleme: {problems}.\n\nDie übrigen Platten von `{pool}` sind zu klein, um ihre Daten aufzunehmen: Es fehlen etwa **{missing} GB**. Füge so bald wie möglich eine neue Platte mit mindestens **{recommended} GB** zum Dateisystem hinzu und entferne danach {disk}."
+      "description": "Die Festplatte **{disk}** ({model}, Seriennummer {serial}) meldet kritische Probleme: {problems}.\n\nDie übrigen Platten von `{pool}` können ihre Daten allein nicht aufnehmen. Füge so bald wie möglich eine neue Platte zum Dateisystem hinzu und entferne danach {disk}. Sie muss mindestens **{needed} GB** fassen; empfohlen sind **{recommended} GB**, damit das Dateisystem nicht kleiner wird."
     },
     "pool_space_low": {
       "title": "Dateisystem {pool} wird voll",
