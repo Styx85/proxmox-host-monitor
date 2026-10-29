@@ -248,3 +248,114 @@ async def test_pool_free_space_uses_smaller_estimate():
     }, calls)
     pool = m.btrfs_pools({"u": "/mnt/ssd"}, {})[0]
     assert pool["free"] == 78923243520
+
+
+
+async def test_btrfs_errors_per_device_and_filesystem():
+    """Device stats are read per counter, device and filesystem."""
+    m.run = fake({
+        "btrfs device stats /mnt/s": "[/dev/sda].write_io_errs    5\n[/dev/sda].corruption_errs  0\n"
+                                     "[/dev/sdb].write_io_errs    0\n",
+        "btrfs device stats /mnt/t": "[/dev/sda3].corruption_errs  7\n",
+    }, [])
+    assert m.btrfs_errors({"u": "/mnt/s", "v": "/mnt/t"}) == {
+        "sda": [{"uuid": "u", "mount": "/mnt/s", "part": "", "counters": {"write_io": 5, "corruption": 0}},
+                {"uuid": "v", "mount": "/mnt/t", "part": "3", "counters": {"corruption": 7}}],
+        "sdb": [{"uuid": "u", "mount": "/mnt/s", "part": "", "counters": {"write_io": 0}}],
+    }
+
+
+def _disk(*codes):
+    return {"serial": "S", "status": "ok",
+            "problems": [{"code": c, "severity": "warning", "value": 1} for c in codes]}
+
+
+IO = {"write_io": 50, "read_io": 8, "flush_io": 1, "corruption": 0, "generation": 0}
+
+
+def _eval(disk, counters, scrub, state, now, mount="/mnt/s"):
+    m.evaluate_btrfs_errors(disk, [{"uuid": "u", "mount": mount, "part": "", "counters": counters}],
+                            {mount: scrub}, state, now)
+    return disk
+
+
+async def test_btrfs_io_errors_without_media_problem_are_a_connection_warning():
+    """Failed requests on a healthy disk point to cable or controller."""
+    disk = _eval(_disk(), IO, None, {}, 100)
+    assert disk["status"] == "warning"
+    assert disk["problems"] == [{"code": "connection_errors", "severity": "warning", "value": 59}]
+    assert disk["btrfs_errors"] == 59
+
+
+async def test_btrfs_errors_with_media_problem_or_corruption_are_critical():
+    """Checksum errors, or failed requests plus media problems, make the disk critical."""
+    disk = _eval(_disk("pending_sectors"), IO, None, {}, 100)
+    assert disk["status"] == "critical" and disk["problems"][-1]["code"] == "btrfs_errors"
+    disk = _eval(_disk(), dict(IO, write_io=0, read_io=0, flush_io=0, corruption=2), None, {}, 100)
+    assert disk["status"] == "critical" and disk["problems"][-1]["value"] == 2
+
+
+async def test_errors_of_several_filesystems_add_up():
+    """A scrub of one filesystem does not clear the errors of another on the same disk."""
+    state = {}
+    clean = {"status": "finished", "uncorrectable": 0, "last": 150, "duration": None}
+    devices = [{"uuid": "u", "mount": "/mnt/s", "part": "1", "counters": dict(IO)},
+               {"uuid": "v", "mount": "/mnt/t", "part": "2", "counters": dict(IO, write_io=0, read_io=0,
+                                                                            flush_io=0, corruption=7)}]
+    disk = _disk()
+    m.evaluate_btrfs_errors(disk, devices, {}, state, 100)
+    assert disk["btrfs_errors"] == 66 and disk["status"] == "critical"
+    disk = _disk()
+    m.evaluate_btrfs_errors(disk, devices, {"/mnt/s": clean}, state, 200)
+    assert disk["btrfs_errors"] == 7 and disk["status"] == "critical"
+    assert set(state) == {"S:u1", "S:v2"}
+
+
+async def test_clean_scrub_after_the_errors_repairs_them():
+    """Only a finished scrub without uncorrectable errors that started after the last change clears them."""
+    state = {}
+    _eval(_disk(), IO, None, state, 100)
+    assert _eval(_disk(), IO, {"status": "finished", "uncorrectable": 0, "last": 50, "duration": None}, state, 200)["btrfs_errors"] == 59
+    for bad in ({"status": "running", "uncorrectable": 0, "last": 150, "duration": None},
+                {"status": "finished", "uncorrectable": 1, "last": 150, "duration": None}):
+        assert _eval(_disk(), IO, bad, state, 200)["btrfs_errors"] == 59
+    clean = {"status": "finished", "uncorrectable": 0, "last": 150, "duration": None}
+    assert _eval(_disk(), IO, clean, state, 300) == dict(_disk(), btrfs_errors=0)
+    # New errors after the scrub count again, until the next clean scrub.
+    disk = _eval(_disk(), dict(IO, write_io=53), clean, state, 400)
+    assert disk["btrfs_errors"] == 3 and disk["status"] == "warning"
+
+
+async def test_errors_found_by_a_running_scrub_belong_to_it():
+    """Stale blocks a scrub finds and repairs are cleared when it finishes cleanly."""
+    state = {}
+    running = {"status": "running", "uncorrectable": 0, "last": 150, "duration": None}
+    assert _eval(_disk(), IO, running, state, 200)["status"] == "warning"
+    disk = _eval(_disk(), dict(IO, generation=5), running, state, 300)
+    assert disk["problems"] == [{"code": "connection_errors", "severity": "warning", "value": 64}]
+    disk = _eval(_disk(), dict(IO, generation=5), dict(running, status="finished"), state, 400)
+    assert disk["btrfs_errors"] == 0 and disk["status"] == "ok"
+
+
+async def test_reset_counters_start_from_zero():
+    """After btrfs device stats -z new errors count in full, even below the old counters."""
+    state = {"S:u": {"baseline": {"write_io": 50}, "last": {"write_io": 100}, "changed": 100}}
+    assert _eval(_disk(), {"write_io": 60}, None, state, 200)["btrfs_errors"] == 60
+    state = {"S:u": {"baseline": dict(IO), "last": dict(IO), "changed": 100}}
+    assert _eval(_disk(), dict(IO, write_io=2, read_io=0, flush_io=0), None, state, 200)["btrfs_errors"] == 2
+
+
+async def test_errors_of_a_scrub_between_two_reports_belong_to_it():
+    """A scrub that ran between two reports clears what changed meanwhile, a later one does not."""
+    state = {}
+    _eval(_disk(), dict(IO, generation=0), None, state, 100)
+    short = {"status": "finished", "uncorrectable": 0, "last": 110, "duration": 60}
+    assert _eval(_disk(), dict(IO, generation=3), short, state, 200)["btrfs_errors"] == 0
+    old = {"status": "finished", "uncorrectable": 0, "last": 110, "duration": 60}
+    assert _eval(_disk(), dict(IO, generation=4), old, state, 300)["btrfs_errors"] == 1
+
+
+async def test_smart_error_log_alone_is_no_media_problem():
+    """Transfer errors in the SMART error log do not make I/O errors critical."""
+    disk = _eval(_disk("error_log", "crc_errors"), IO, None, {}, 100)
+    assert disk["status"] == "warning" and disk["problems"][-1]["code"] == "connection_errors"

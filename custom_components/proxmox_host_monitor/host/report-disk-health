@@ -21,6 +21,9 @@ import urllib.request
 WEBHOOK_URL_FILE = "/etc/proxmox-host-monitor/webhook-url"
 # When each disk first reported pending sectors, by serial.
 PENDING_STATE_FILE = "/var/lib/proxmox-host-monitor/pending-sectors.json"
+# Btrfs device counters per serial: the values a clean scrub repaired, and
+# when the counters last changed.
+BTRFS_STATE_FILE = "/var/lib/proxmox-host-monitor/btrfs-errors.json"
 
 TEMP_WARNING = 50
 TEMP_CRITICAL = 55
@@ -232,14 +235,104 @@ def btrfs_mounts():
 
 
 def btrfs_errors(mounts):
-    """Return the summed Btrfs device error counters per disk name."""
+    """Return the Btrfs device error counters per disk name.
+
+    Each disk gets one entry per Btrfs device on it: the filesystem UUID, its
+    mount, the partition suffix of the device and the counters.
+    """
     errors = {}
-    for mount in mounts.values():
+    for uuid, mount in mounts.items():
+        devices = {}
         for line in run("btrfs", "device", "stats", mount).stdout.splitlines():
-            match = re.match(r"\[/dev/(sd[a-z]+|nvme\d+)\S*\]\.\w+\s+(\d+)", line)
+            match = re.match(r"\[/dev/(sd[a-z]+|nvme\d+)(\S*)\]\.(\w+)_errs\s+(\d+)", line)
             if match:
-                errors[match.group(1)] = errors.get(match.group(1), 0) + int(match.group(2))
+                name, part, counter, value = match.groups()
+                device = devices.get((name, part))
+                if device is None:
+                    device = devices[(name, part)] = {
+                        "uuid": uuid, "mount": mount, "part": part, "counters": {},
+                    }
+                    errors.setdefault(name, []).append(device)
+                device["counters"][counter] = int(value)
     return errors
+
+
+# Btrfs counters of failed requests, and of blocks older than expected (a
+# write that never arrived, found by a later read or scrub); the cause can as
+# well be the cable, the controller or another disk stalling the controller.
+BTRFS_IO = ("write_io", "read_io", "flush_io", "generation")
+# Problems the disk itself reports for its media (not the SMART error log,
+# which also lists transfer errors such as ICRC).
+MEDIA_PROBLEMS = {
+    "smart_failed", "failure_predicted", "reallocated_sectors", "pending_sectors",
+    "offline_uncorrectable", "reported_uncorrectable", "self_test_failed",
+    "media_errors", "nvme_critical_warning",
+}
+
+
+def unrepaired(counters, scrub, entry, now):
+    """Return the counters of one Btrfs device minus what a clean scrub repaired.
+
+    Counters only ever grow, so the values seen when a scrub that started after
+    the last change finished without uncorrectable errors become the baseline.
+    A change while a scrub runs counts as found by that scrub, since it repairs
+    what it finds; so does a change first seen after a scrub that was still
+    running at the previous report. entry holds the baseline, the last
+    counters, when they last changed and when they were last seen; it is
+    updated in place.
+    """
+    baseline, last, seen = entry.setdefault("baseline", {}), entry.get("last"), entry.get("seen")
+    if counters != last:
+        for name, value in counters.items():
+            # Reset counters (btrfs device stats -z) start again from zero.
+            if last is not None and value < last.get(name, 0):
+                baseline[name] = 0
+        during_scrub = scrub and scrub["last"] is not None and (
+            scrub["status"] == "running"
+            or seen is not None and scrub["last"] + (scrub["duration"] or 0) >= seen
+        )
+        entry["last"], entry["changed"] = dict(counters), scrub["last"] if during_scrub else now
+    entry["seen"] = now
+    if (
+        scrub
+        and scrub["status"] == "finished"
+        and scrub["uncorrectable"] == 0
+        and scrub["last"] is not None
+        and scrub["last"] >= entry["changed"]
+    ):
+        baseline.update(counters)
+    return {name: max(value - baseline.get(name, 0), 0) for name, value in counters.items()}
+
+
+def evaluate_btrfs_errors(disk, devices, scrubs, state, now):
+    """Add the Btrfs errors no clean scrub repaired yet to a disk.
+
+    devices are the disk's entries from btrfs_errors, scrubs the scrub status
+    per mount. I/O errors on a disk whose SMART data shows no media problem
+    point to the connection and are a warning; checksum errors or I/O errors
+    together with media problems are critical.
+    """
+    io = corrupt = 0
+    for device in devices:
+        key = f"{disk['serial']}:{device['uuid']}{device['part']}"
+        new = unrepaired(
+            device["counters"], scrubs.get(device["mount"]), state.setdefault(key, {}), now
+        )
+        device_io = sum(new.get(name, 0) for name in BTRFS_IO)
+        io += device_io
+        corrupt += sum(new.values()) - device_io
+
+    disk["btrfs_errors"] = io + corrupt
+    media = any(p["code"] in MEDIA_PROBLEMS for p in disk["problems"])
+    if corrupt or (io and media):
+        disk["problems"].append(
+            {"code": "btrfs_errors", "severity": "critical", "value": disk["btrfs_errors"]}
+        )
+        disk["status"] = "critical"
+    elif io:
+        disk["problems"].append({"code": "connection_errors", "severity": "warning", "value": io})
+        if disk["status"] == "ok":
+            disk["status"] = "warning"
 
 
 def disk_name(path):
@@ -734,15 +827,16 @@ def main():
         save_json(PENDING_STATE_FILE, pending_since)
 
     mounts = btrfs_mounts()
+    # When the counters were read, before the scrub status that judges them.
+    now = int(time.time())
     errors = btrfs_errors(mounts)
+    btrfs_state = load_json(BTRFS_STATE_FILE, {})
+    scrubs = {mount: scrub_status(mount) for mount in mounts.values()}
     for disk in disks:
         if disk["name"] in errors:
-            disk["btrfs_errors"] = errors[disk["name"]]
-            if errors[disk["name"]]:
-                disk["problems"].append(
-                    {"code": "btrfs_errors", "severity": "critical", "value": errors[disk["name"]]}
-                )
-                disk["status"] = "critical"
+            evaluate_btrfs_errors(disk, errors[disk["name"]], scrubs, btrfs_state, now)
+    if "--dry-run" not in sys.argv:
+        save_json(BTRFS_STATE_FILE, btrfs_state)
 
     io_errors = kernel_io_errors()
     for disk in disks:

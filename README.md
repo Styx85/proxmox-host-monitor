@@ -56,6 +56,7 @@ Then run `systemctl restart smartd`; `smartd -q showtests` lists the next tests.
 
 - One device per Btrfs filesystem with free space, data, raw size, usage, number of disks, the worst health of its disks, a problem sensor listing its critical and warning disks, the running operation (balance or scrub with progress, or the disk being removed). The usage sensor carries the profiles per data, metadata and system and the allocation per disk.
 - Every report checks for each disk whether the data of its filesystem would still fit on the other disks (respecting the RAID profiles and a safety margin). The result is shown as *Removable* on the disk.
+- Btrfs device errors count until a scrub that started after them finishes without uncorrectable errors. Failed reads, writes or flushes on a disk whose SMART data shows no media problem are reported as *connection errors* (cable, controller, or another disk stalling the controller), a warning; corrupted data, or failed requests together with media problems, make the disk critical.
 - A critical disk raises a repair issue under **Settings → System → Repairs**:
   - **Removable**: confirm the repair to remove the disk from the filesystem. The host moves its data to the other disks with `btrfs device remove` and reports the progress. The host checks again before it starts and refuses while a balance runs or if the space no longer suffices.
   - **Not enough space**: the issue tells you how much space is missing and the minimum size of a new disk to buy.
