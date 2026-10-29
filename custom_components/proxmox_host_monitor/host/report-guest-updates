@@ -46,7 +46,9 @@ APT_TIMEOUT = 3600
 APP_TIMEOUT = 3 * 3600
 BACKUP_TIMEOUT = 3 * 3600
 
-ENV = ("env", "DEBIAN_FRONTEND=noninteractive", "TERM=dumb", "PHS_SILENT=1")
+# Not TERM=dumb: the community-scripts core calls `clear` before every app update and
+# aborts when it fails, which it does on a dumb terminal.
+ENV = ("env", "DEBIAN_FRONTEND=noninteractive", "TERM=xterm", "PHS_SILENT=1")
 APT_OPTIONS = (
     "-o", "Dpkg::Options::=--force-confdef",
     "-o", "Dpkg::Options::=--force-confold",
@@ -60,7 +62,11 @@ def run(*args, timeout=120):
             stdin=subprocess.DEVNULL, timeout=timeout,
         )
     except subprocess.TimeoutExpired as err:
-        return subprocess.CompletedProcess(args, 124, err.stdout or "", f"timeout after {timeout} s")
+        # The captured output is bytes here, even with text=True.
+        output = err.stdout or b""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        return subprocess.CompletedProcess(args, 124, output, f"timeout after {timeout} s")
 
 
 def pct_exec(vmid, *command, timeout=120):
@@ -468,6 +474,7 @@ def update(vmid, command_id):
     def fail(error):
         state.update(state="failed", error=error, finished=now())
         save_state(vmid, state)
+        return False
 
     snapshot, error = restore_point(vmid, log)
     if error:
@@ -487,7 +494,7 @@ def update(vmid, command_id):
 
     if before.get("latest") and before.get("installed") != before["latest"]:
         result = pct_exec(vmid, *ENV, "bash", "/usr/bin/update", timeout=APP_TIMEOUT)
-        log.step("community-scripts update", result)
+        ok = log.step("community-scripts update", result)
         after = app_info(vmid, releases) or {}
         state["to"] = after.get("installed")
         if after.get("installed") != before["latest"]:
@@ -495,10 +502,14 @@ def update(vmid, command_id):
                 f"{before.get('app')} is still {after.get('installed')}, "
                 f"expected {before['latest']}: {Log.tail(result)}"
             )
+        # The version file can already show the new version when the script failed later on.
+        if not ok:
+            return fail(f"community-scripts update failed: {Log.tail(result)}")
 
     remove_old_restore_points(vmid, snapshot, log)
     state.update(state="done", finished=now(), error=None)
     save_state(vmid, state)
+    return True
 
 
 def rollback(vmid, snapshot, command_id):
@@ -512,11 +523,13 @@ def rollback(vmid, snapshot, command_id):
         result = run("pct", "rollback", str(vmid), snapshot, "--start", "1", timeout=1800)
     else:
         result = restore_backup(vmid, snapshot, log)
-    if log.step(f"rollback {snapshot}", result):
+    ok = log.step(f"rollback {snapshot}", result)
+    if ok:
         state.update(state="done", finished=now(), error=None)
     else:
         state.update(state="failed", finished=now(), error=Log.tail(result, 3))
     save_state(vmid, state)
+    return ok
 
 
 def restore_backup(vmid, volid, log):
@@ -537,14 +550,17 @@ def restore_backup(vmid, volid, log):
 
 def main():
     if len(sys.argv) >= 4 and sys.argv[1] == "--update":
-        update(int(sys.argv[2]), sys.argv[3])
+        ok = update(int(sys.argv[2]), sys.argv[3])
     elif len(sys.argv) >= 5 and sys.argv[1] == "--rollback":
-        rollback(int(sys.argv[2]), sys.argv[3], sys.argv[4])
+        ok = rollback(int(sys.argv[2]), sys.argv[3], sys.argv[4])
     else:
         report()
         return
     # Tell Home Assistant the result right away.
     report()
+    # A failed update or rollback also fails its systemd unit.
+    if not ok:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
