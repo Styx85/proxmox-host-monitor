@@ -706,6 +706,23 @@ def unattended_upgrades():
     }
 
 
+def scrub_problem(scrub):
+    """Return (code, severity, value) for the errors of a scrub, or None.
+
+    Errors the scrub repaired from another copy are no lasting problem: Home
+    Assistant announces the finished scrub with its result once. Only errors it
+    could not repair, or did not report as repaired, remain.
+    """
+    if not scrub:
+        return None
+    if scrub.get("uncorrectable"):
+        return "scrub_uncorrectable", "critical", scrub["uncorrectable"]
+    unrepaired = scrub.get("errors", 0) - scrub.get("corrected", 0)
+    if unrepaired > 0:
+        return "scrub_errors", "warning", unrepaired
+    return None
+
+
 def host_report(pools):
     """Return host information and its problems."""
     now = time.time()
@@ -730,10 +747,9 @@ def host_report(pools):
             problem("scrub_never", "warning", pool["mount"])
         elif now - scrub["last"] > SCRUB_MAX_AGE:
             problem("scrub_overdue", "warning", pool["mount"], int((now - scrub["last"]) / DAY))
-        if scrub and scrub.get("uncorrectable"):
-            problem("scrub_uncorrectable", "critical", pool["mount"], scrub["uncorrectable"])
-        elif scrub and scrub.get("errors"):
-            problem("scrub_errors", "warning", pool["mount"], scrub["errors"])
+        found = scrub_problem(scrub)
+        if found:
+            problem(found[0], found[1], pool["mount"], found[2])
 
     backup = backups()
     if backup["jobs"] == 0:

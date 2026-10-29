@@ -359,3 +359,12 @@ async def test_smart_error_log_alone_is_no_media_problem():
     """Transfer errors in the SMART error log do not make I/O errors critical."""
     disk = _eval(_disk("error_log", "crc_errors"), IO, None, {}, 100)
     assert disk["status"] == "warning" and disk["problems"][-1]["code"] == "connection_errors"
+
+
+async def test_scrub_problem_ignores_repaired_errors():
+    """Repaired scrub errors are no lasting problem; unrepaired ones are."""
+    assert m.scrub_problem(None) is None
+    assert m.scrub_problem({"errors": 20, "corrected": 20, "uncorrectable": 0}) is None
+    assert m.scrub_problem({"errors": 0, "corrected": 0, "uncorrectable": 0}) is None
+    assert m.scrub_problem({"errors": 23, "corrected": 20, "uncorrectable": 0}) == ("scrub_errors", "warning", 3)
+    assert m.scrub_problem({"errors": 23, "corrected": 20, "uncorrectable": 3}) == ("scrub_uncorrectable", "critical", 3)

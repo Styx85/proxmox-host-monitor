@@ -73,7 +73,7 @@ Every health change of a disk, a Btrfs filesystem or the host and every start an
 - *Host problem* on the Proxmox node lists everything that needs attention on the host itself, each also as a repair issue:
   - failed systemd services,
   - no backup job, no backup yet, last backup failed or older than 8 days,
-  - Btrfs scrub never run, older than 35 days, or with (uncorrectable) errors,
+  - Btrfs scrub never run, older than 35 days, or with errors it could not repair (errors it repaired are announced once by `scrub_finished`, not kept as a problem),
   - temperatures above the sensor's limit (or 85 °C / 95 °C),
   - LVM thin pools above 80 % / 90 % (data or metadata),
   - network interface errors, an expiring or expired web interface certificate, an unsynchronized clock and failed automatic updates.

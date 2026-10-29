@@ -354,7 +354,7 @@
     },
     "host_scrub_errors": {
       "title": "Scrub found errors on {item}",
-      "description": "The last scrub of `{item}` found {value} errors. Check `btrfs scrub status {item}` and the SMART values of the disks."
+      "description": "The last scrub of `{item}` found {value} errors it does not report as repaired. Check `btrfs scrub status -R {item}` and the SMART values of the disks."
     },
     "host_backup_missing": {
       "title": "No backup job on the Proxmox host",
