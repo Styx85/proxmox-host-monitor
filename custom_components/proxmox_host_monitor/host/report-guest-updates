@@ -46,7 +46,9 @@ APT_TIMEOUT = 3600
 APP_TIMEOUT = 3 * 3600
 BACKUP_TIMEOUT = 3 * 3600
 
-ENV = ("env", "DEBIAN_FRONTEND=noninteractive", "TERM=dumb", "PHS_SILENT=1")
+# Not TERM=dumb: the community-scripts core calls `clear` before every app update and
+# aborts when it fails, which it does on a dumb terminal.
+ENV = ("env", "DEBIAN_FRONTEND=noninteractive", "TERM=xterm", "PHS_SILENT=1")
 APT_OPTIONS = (
     "-o", "Dpkg::Options::=--force-confdef",
     "-o", "Dpkg::Options::=--force-confold",
