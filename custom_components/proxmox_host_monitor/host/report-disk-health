@@ -68,10 +68,27 @@ def smartctl(*args):
         return {}, result.returncode
 
 
+def seagate(data):
+    return "seagate" in (data.get("model_family") or "").lower() or (
+        data.get("model_name") or ""
+    ).startswith("ST")
+
+
+def ata_raw(attr, data):
+    """Return the counter in an ATA attribute's raw value.
+
+    Some vendors pack extra data into the upper bytes. Seagate stores three
+    16-bit counters in Command_Timeout (188); the lowest is the total."""
+    value = attr["raw"]["value"]
+    if attr["id"] == 188 and seagate(data):
+        return value & 0xFFFF
+    return value & 0xFFFFFFFF
+
+
 def disk_info(data):
     """Return general, mostly static information about a disk."""
     attrs = {
-        attr["id"]: attr["raw"]["value"] & 0xFFFFFFFF
+        attr["id"]: ata_raw(attr, data)
         for attr in data.get("ata_smart_attributes", {}).get("table", [])
     }
     nvme = data.get("nvme_smart_health_information_log", {})
@@ -171,8 +188,7 @@ def check_disk(dev, completions=None, pending_since=None):
     for attr in data.get("ata_smart_attributes", {}).get("table", []):
         if attr["id"] in ATA_CHECKS:
             key, severity = ATA_CHECKS[attr["id"]]
-            # Some vendors pack extra data into the upper bytes.
-            value = attr["raw"]["value"] & 0xFFFFFFFF
+            value = ata_raw(attr, data)
             disk[key] = value
             if attr["id"] == 197:
                 if value == 0:
