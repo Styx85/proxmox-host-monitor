@@ -106,6 +106,29 @@ async def test_pending_sectors_need_to_persist(monkeypatch):
     assert pending_since == {}
 
 
+async def test_seagate_command_timeouts_are_unpacked():
+    """Seagate packs three 16-bit counters into Command_Timeout; the lowest is the total."""
+    data = _smart(1000, [], supported=False)
+    data["model_name"] = "ST4000VX016-3CV104"
+    data["ata_smart_attributes"] = {"table": [{"id": 188, "raw": {"value": 0x1_0001_0001}}]}
+    m.smartctl = lambda *args: (data, 0)
+
+    disk = m.check_disk({"name": "/dev/sdb", "type": "sat"}, None, {})
+    assert disk["command_timeouts"] == 1
+    assert disk["problems"] == [{"code": "command_timeouts", "severity": "warning", "value": 1}]
+
+    # Other attributes keep the lower 32 bits.
+    data["ata_smart_attributes"] = {"table": [{"id": 199, "raw": {"value": 0x1_0001_0001}}]}
+    disk = m.check_disk({"name": "/dev/sdb", "type": "sat"}, None, {})
+    assert disk["crc_errors"] == 0x0001_0001
+
+    # Other vendors count timeouts in one plain counter.
+    data["model_name"] = "SAMSUNG HD103SI"
+    data["ata_smart_attributes"] = {"table": [{"id": 188, "raw": {"value": 65536}}]}
+    disk = m.check_disk({"name": "/dev/sdh", "type": "sat"}, None, {})
+    assert disk["command_timeouts"] == 65536
+
+
 def _smart(hours, tests, supported=True):
     return {
         "model_name": "X",
