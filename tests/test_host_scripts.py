@@ -2,6 +2,7 @@
 
 import importlib.machinery
 import importlib.util
+import subprocess
 from pathlib import Path
 import types
 
@@ -391,3 +392,154 @@ async def test_scrub_problem_ignores_repaired_errors():
     assert m.scrub_problem({"errors": 0, "corrected": 0, "uncorrectable": 0}) is None
     assert m.scrub_problem({"errors": 23, "corrected": 20, "uncorrectable": 0}) == ("scrub_errors", "warning", 3)
     assert m.scrub_problem({"errors": 23, "corrected": 20, "uncorrectable": 3}) == ("scrub_uncorrectable", "critical", 3)
+
+
+INSTALLER = SCRIPT.parent / "install.sh"
+
+
+def _installer_function(name):
+    """Return the source of one shell function of the installer."""
+    text = INSTALLER.read_text(encoding="utf-8")
+    start = text.index(f"\n{name}() {{\n") + 1
+    return text[start : text.index("\n}\n", start) + 3]
+
+
+def _run_installer_functions(root, commands):
+    """Run detect()/replace_found() against a fake host below root."""
+    harness = "\n".join(
+        [
+            "set -euo pipefail",
+            'VERSION="9.9.9"',
+            f'SBIN="{root}/sbin"',
+            f'CONF_DIR="{root}/conf"',
+            f'SYSTEMD_DIR="{root}/systemd"',
+            f'SMARTD_HOOKS="{root}/run.d"',
+            f'CRON_FILES="{root}/cron.d/*"',
+            f'LEGACY_FILES="{root}/systemd/proxmox-reboot-status.timer"',
+            f'systemctl() {{ echo "systemctl $*" >> "{root}/calls"; }}',
+            _installer_function("detect"),
+            _installer_function("replace_found"),
+            commands,
+        ]
+    )
+    result = subprocess.run(
+        ["bash", "-c", harness], capture_output=True, text=True, check=True
+    )
+    calls = root / "calls"
+    return result.stdout, calls.read_text() if calls.exists() else ""
+
+
+def _fake_host(root, own):
+    """Create a host with own scripts, the predecessor and unrelated services."""
+    for sub in ("sbin", "conf", "systemd", "run.d", "cron.d"):
+        (root / sub).mkdir()
+    if own:
+        (root / "sbin/proxmox-host-monitor-reboot").write_text("")
+        (root / "conf/version").write_text("2.5.7\n")
+    (root / "systemd/proxmox-reboot-status.timer").write_text("")
+    backup = root / "sbin/backup-status"
+    backup.write_text("curl -X POST http://ha:8123/api/webhook/backup\n")
+    (root / "systemd/backup-status.service").write_text(
+        f"[Service]\nExecStart={backup} --quiet\n"
+    )
+    (root / "systemd/docker-image-update.service").write_text(
+        "[Service]\nExecStart=-smartctl -a /dev/sda\n"
+    )
+    for name, body in (
+        ("50ha", "curl http://ha/api/webhook/smart\n"),
+        ("70ntfy", "curl https://ntfy.sh/disks\n"),
+        ("80off", "curl http://ha/api/webhook/old\n"),
+    ):
+        hook = root / "run.d" / name
+        hook.write_text(body)
+        hook.chmod(0o755 if name != "80off" else 0o644)
+    (root / "cron.d/ha").write_text("* * * * * root curl /api/webhook/cron\n")
+
+
+def _kinds(output):
+    """Map unit name (services) or file name (everything else) to its kind."""
+    kinds = {}
+    for line in output.splitlines():
+        kind, description, path = line.split("\t")
+        if description.startswith("Service"):
+            kinds[description.rsplit(": ", 1)[1]] = kind
+        else:
+            kinds[Path(path).name] = kind
+    return kinds
+
+
+async def test_installer_update_never_disables_anything(tmp_path):
+    """Updating only replaces own files and removes the predecessor."""
+    _fake_host(tmp_path, own=True)
+    output, calls = _run_installer_functions(
+        tmp_path, 'FOUND=$(detect); printf "%s\\n" "$FOUND"; printf "%s\\n" "$FOUND" | replace_found'
+    )
+    kinds = _kinds(output.split("Removed")[0])
+    assert kinds == {
+        "proxmox-host-monitor-*": "own",
+        "proxmox-reboot-status.timer": "legacy",
+        "backup-status.service": "info",
+        "docker-image-update.service": "info",
+        "50ha": "info",
+        "70ntfy": "info",
+        "ha": "info",
+    }
+    assert calls == "systemctl disable --now proxmox-reboot-status.timer\n"
+    assert not (tmp_path / "systemd/proxmox-reboot-status.timer").exists()
+    assert (tmp_path / "run.d/50ha").stat().st_mode & 0o111
+    assert (tmp_path / "run.d/70ntfy").stat().st_mode & 0o111
+
+
+async def test_installer_first_install_only_disables_ha_smartd_hooks(tmp_path):
+    """Other services stay; only smartd hooks posting to HA are disabled."""
+    _fake_host(tmp_path, own=False)
+    output, calls = _run_installer_functions(
+        tmp_path, 'FOUND=$(detect); printf "%s\\n" "$FOUND"; printf "%s\\n" "$FOUND" | replace_found'
+    )
+    kinds = _kinds("\n".join(line for line in output.splitlines() if "\t" in line))
+    assert kinds["50ha"] == "foreign"
+    assert kinds["70ntfy"] == "info"
+    assert "80off" not in kinds
+    assert kinds["backup-status.service"] == "info"
+    assert kinds["docker-image-update.service"] == "info"
+    assert "proxmox-host-monitor-*" not in kinds
+    assert "backup" not in calls and "docker" not in calls
+    assert not (tmp_path / "run.d/50ha").stat().st_mode & 0o111
+    assert (tmp_path / "run.d/70ntfy").stat().st_mode & 0o111
+    assert (tmp_path / "systemd/backup-status.service").exists()
+
+
+async def test_installer_replace_ignores_paths_outside_smartd_hooks(tmp_path):
+    """A foreign entry that is not a smartd hook is never touched."""
+    _fake_host(tmp_path, own=False)
+    script = tmp_path / "sbin/backup-status"
+    script.chmod(0o755)
+    _, calls = _run_installer_functions(
+        tmp_path, f'printf "foreign\\tx\\t%s\\n" "{script}" | replace_found'
+    )
+    assert calls == ""
+    assert script.stat().st_mode & 0o111
+
+
+async def test_installer_asks_before_removing_even_with_long_lists():
+    """Removing or disabling needs confirmation, updating alone does not."""
+    entry = {
+        "own": "own\tProxmox Host Monitor\t/usr/local/sbin/x\n",
+        "legacy": "legacy\tProxmox Reboot Update\t/etc/x.timer\n",
+        "foreign": "foreign\tsmartd hook\t/etc/smartmontools/run.d/x\n",
+        "info": "info\tService (left unchanged): x.service\t/x\n",
+    }
+    function = _installer_function("needs_confirmation")
+    for found, expected in (
+        (entry["own"] + entry["info"] * 5000, 1),
+        (entry["legacy"] + entry["info"] * 5000, 0),
+        (entry["own"] + entry["foreign"] + entry["info"] * 5000, 0),
+        ("", 1),
+    ):
+        result = subprocess.run(
+            ["bash", "-c", f'set -euo pipefail\n{function}\nneeds_confirmation "$(cat)"'],
+            input=found.encode(),
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == expected
