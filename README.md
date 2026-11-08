@@ -177,10 +177,12 @@ Before changing anything, the installer looks for:
 |---|---|
 | an earlier Proxmox Host Monitor | **update** |
 | the Proxmox Reboot Update status script and timer | **remove** |
-| other systemd services whose script posts to a Home Assistant webhook or calls `smartctl`, and other smartd hooks | **disable** (timer stopped and disabled, smartd hook made non-executable, files kept) |
-| cron jobs posting to a Home Assistant webhook | **keep** (only listed) |
+| on the first installation: other smartd hooks posting to a Home Assistant webhook | **disable** (made non-executable, file kept) |
+| other systemd services whose script posts to a Home Assistant webhook or calls `smartctl`, other smartd hooks, cron jobs posting to a Home Assistant webhook | **keep** (only listed) |
 
-Over SSH, Home Assistant shows the list and waits for confirmation. The one-line command asks `Overwrite/update? [y/N]` in the terminal. `--check` only lists, `--yes` skips the question.
+The installer never stops or disables other services: a script that posts to Home Assistant or calls `smartctl` may do something else entirely, such as reporting backups. Updating an existing Proxmox Host Monitor only replaces its own files (and removes Proxmox Reboot Update if it is still there).
+
+Over SSH, Home Assistant shows the list and waits for confirmation. The one-line command updates its own files without asking and asks `Remove/disable the entries above and install? [y/N]` in the terminal only if something else would be removed or disabled. `--check` only lists, `--yes` skips the question.
 
 ### Uninstall
 

@@ -33,7 +33,7 @@
       },
       "confirm_replace": {
         "title": "Existing installation found",
-        "description": "The following already exists on the host:\n\n{items}\n\n**update** = replaced by the new version, **remove** = deleted, **disable** = timer stopped and disabled, files are kept, **keep** = left unchanged.\n\nSubmit to overwrite/update, or close this dialog to change nothing."
+        "description": "The following already exists on the host:\n\n{items}\n\n**update** = replaced by the new version, **remove** = deleted, **disable** = smartd hook made non-executable, file is kept, **keep** = left unchanged.\n\nSubmit to overwrite/update, or close this dialog to change nothing."
       },
       "manual": {
         "title": "Install command",
@@ -81,7 +81,7 @@
       },
       "confirm_replace": {
         "title": "Existing installation found",
-        "description": "The following already exists on the host:\n\n{items}\n\n**update** = replaced by the new version, **remove** = deleted, **disable** = timer stopped and disabled, files are kept, **keep** = left unchanged.\n\nSubmit to overwrite/update, or close this dialog to change nothing."
+        "description": "The following already exists on the host:\n\n{items}\n\n**update** = replaced by the new version, **remove** = deleted, **disable** = smartd hook made non-executable, file is kept, **keep** = left unchanged.\n\nSubmit to overwrite/update, or close this dialog to change nothing."
       },
       "manual": {
         "title": "Install command",

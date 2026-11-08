@@ -33,7 +33,7 @@
       },
       "confirm_replace": {
         "title": "Bestehende Installation gefunden",
-        "description": "Auf dem Host gibt es bereits:\n\n{items}\n\n**update** = wird durch die neue Version ersetzt, **remove** = wird gelöscht, **disable** = Timer wird gestoppt und deaktiviert, Dateien bleiben, **keep** = bleibt unverändert.\n\nAbsenden zum Überschreiben/Aktualisieren, oder diesen Dialog schließen, um nichts zu ändern."
+        "description": "Auf dem Host gibt es bereits:\n\n{items}\n\n**update** = wird durch die neue Version ersetzt, **remove** = wird gelöscht, **disable** = smartd-Hook wird nicht mehr ausgeführt, Datei bleibt, **keep** = bleibt unverändert.\n\nAbsenden zum Überschreiben/Aktualisieren, oder diesen Dialog schließen, um nichts zu ändern."
       },
       "manual": {
         "title": "Installationsbefehl",
@@ -81,7 +81,7 @@
       },
       "confirm_replace": {
         "title": "Bestehende Installation gefunden",
-        "description": "Auf dem Host gibt es bereits:\n\n{items}\n\n**update** = wird durch die neue Version ersetzt, **remove** = wird gelöscht, **disable** = Timer wird gestoppt und deaktiviert, Dateien bleiben, **keep** = bleibt unverändert.\n\nAbsenden zum Überschreiben/Aktualisieren, oder diesen Dialog schließen, um nichts zu ändern."
+        "description": "Auf dem Host gibt es bereits:\n\n{items}\n\n**update** = wird durch die neue Version ersetzt, **remove** = wird gelöscht, **disable** = smartd-Hook wird nicht mehr ausgeführt, Datei bleibt, **keep** = bleibt unverändert.\n\nAbsenden zum Überschreiben/Aktualisieren, oder diesen Dialog schließen, um nichts zu ändern."
       },
       "manual": {
         "title": "Installationsbefehl",
